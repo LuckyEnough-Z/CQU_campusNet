@@ -80,6 +80,81 @@ LAN_PREFIX=$(ip -o -4 addr show dev br-lan 2>/dev/null \
     ' /proc/net/nf_conntrack 2>/dev/null | sort -nr | head -10
 
     echo
+    echo "--- per-LAN-client top-10 TCP dst-ports (HTTP-likely / LEAK? tagged) ---"
+    echo "  HTTP-likely = port plausibly carrying plaintext HTTP (UA exposure)"
+    echo "  caught      = dst port is currently rerouted via TPROXY → ua3f"
+    echo "  LEAK?       = HTTP-likely AND not in the TPROXY catch set"
+    echo
+
+    # Detect TPROXY catch ports from running nftables rules; fall back to the
+    # set in luci-app-cquauth/http_tproxy.md.
+    TPROXY_PORTS=$(nft -a list ruleset 2>/dev/null \
+        | awk '/tproxy ip to/{print}' \
+        | grep -oE 'dport \{[^}]+\}' | head -1 \
+        | tr -d '{}' | sed 's/dport//' | tr ',' ' ' | tr -s ' ')
+    [ -z "$(echo $TPROXY_PORTS | tr -d ' ')" ] && TPROXY_PORTS="80 8080 7777 6969 2710 1096"
+    HTTP_LIKELY="80 8000 8001 8080 8081 8082 8088 8443 8800 8888 9000 9080 9090"
+    echo "  TPROXY catch set (detected): $(echo $TPROXY_PORTS)"
+    echo "  HTTP-likely port set:        $HTTP_LIKELY"
+    echo
+
+    awk -v p="${LAN_PREFIX}." '
+        {
+            proto=""; src=""; dport=""
+            for (i=1; i<=NF; i++) {
+                if (i == 3 && proto == "") proto = $i
+                else if ($i ~ /^src=/ && src == "")   { sub("src=","",$i);   src = $i }
+                else if ($i ~ /^dport=/ && dport == "") { sub("dport=","",$i); dport = $i+0 }
+            }
+            if (proto != "tcp") next
+            if (index(src, p) != 1) next
+            print src, dport
+        }
+    ' /proc/net/nf_conntrack 2>/dev/null \
+        | sort | uniq -c \
+        | awk -v tproxy="$TPROXY_PORTS" -v hlikely="$HTTP_LIKELY" '
+            BEGIN {
+                n = split(tproxy, t, " "); for (i=1; i<=n; i++) if (t[i] != "") is_tproxy[t[i]+0] = 1
+                n = split(hlikely, h, " "); for (i=1; i<=n; i++) is_http[h[i]+0] = 1
+            }
+            { rows[++r] = $1 "|" $2 "|" $3 }
+            END {
+                # group by src, sort each groups ports by count desc
+                for (i=1; i<=r; i++) {
+                    split(rows[i], a, "|")
+                    src = a[2]; cnt = a[1]+0; port = a[3]+0
+                    src_seen[src] = 1
+                    grp[src "|" port] = cnt
+                }
+                for (s in src_seen) {
+                    # collect ports for this src into arr, sort by count
+                    n = 0
+                    for (k in grp) {
+                        if (index(k, s "|") == 1) { n++; p_port[n] = substr(k, length(s)+2)+0; p_cnt[n] = grp[k] }
+                    }
+                    # simple insertion sort by p_cnt desc
+                    for (i=2; i<=n; i++) {
+                        for (j=i; j>1 && p_cnt[j] > p_cnt[j-1]; j--) {
+                            t = p_cnt[j]; p_cnt[j] = p_cnt[j-1]; p_cnt[j-1] = t
+                            t = p_port[j]; p_port[j] = p_port[j-1]; p_port[j-1] = t
+                        }
+                    }
+                    printf "%s:\n", s
+                    lim = (n > 10 ? 10 : n)
+                    for (i=1; i<=lim; i++) {
+                        tag = ""
+                        if (is_http[p_port[i]]) {
+                            if (is_tproxy[p_port[i]]) tag = "[HTTP-likely, caught]"
+                            else                       tag = "[HTTP-likely, LEAK?]"
+                        }
+                        printf "  %5d/tcp  %4d conns  %s\n", p_port[i], p_cnt[i], tag
+                    }
+                    print ""
+                    delete p_port; delete p_cnt
+                }
+            }
+        '
+
     echo "--- hint ---"
     echo "* High 'http=' count → that client is sending plaintext HTTP, the"
     echo "  easiest signal for UA-based sharing detection. Consider UA3F or"
@@ -87,6 +162,11 @@ LAN_PREFIX=$(ip -o -4 addr show dev br-lan 2>/dev/null \
     echo "* Very high 'uniq_sport' or wide 'sport_range' on a single client →"
     echo "  multiple OS stacks behind a NAT (which is exactly what the portal"
     echo "  is looking for)."
+    echo "* [HTTP-likely, LEAK?] tags above flag dst ports plausibly carrying"
+    echo "  HTTP that your TPROXY rule does NOT currently redirect, so any UA"
+    echo "  on those ports reaches the campus net raw. Either add those ports"
+    echo "  to the TPROXY catch set in /etc/nfts/100-tproxy.nft, or block them"
+    echo "  for that client."
 } > "$OUT" 2>&1
 
 echo "$OUT"

@@ -93,6 +93,36 @@ The report contains, for every LAN-side source IP active in conntrack:
 so each IP has a hostname/MAC next to it. The "hint" section at the bottom
 spells out how to read the numbers.
 
+Since 1.0.5 the report also contains a **per-LAN-client top-10 TCP dst-port
+histogram** with two tags:
+
+- `[HTTP-likely, caught]` — port is in the plaintext-HTTP-likely set
+  (`{80, 8000, 8001, 8080, 8081, 8082, 8088, 8443, 8800, 8888, 9000,
+  9080, 9090}`) **and** is currently rerouted through TPROXY → UA3F, so
+  the original UA is rewritten before egress. Safe.
+- `[HTTP-likely, LEAK?]` — port is in the same set but **not** in the
+  TPROXY catch set, so any HTTP request on that port leaves the router
+  with the client's real UA. Most likely sharing-detection trigger.
+
+The TPROXY catch set is parsed at runtime from
+`nft -a list ruleset | grep 'tproxy ip to'`, so it reflects the actual
+rule currently loaded rather than a hard-coded list. With the catch set
+documented in `luci-app-cquauth/http_tproxy.md` (`{80, 1096, 2710, 6969,
+7777, 8080}`), any HTTP request to e.g. port 8000 / 8443 / 9090 on the
+campus net will show up as `[LEAK?]` and is a likely cause when
+`共享上网` fires.
+
+Remediation paths the report does not pick between for you:
+
+- extend the TPROXY rule to catch more ports (low-cost, but you cannot
+  enumerate every HTTP variant by port alone — non-HTTP traffic on the
+  added ports will be mis-routed);
+- DPI-based marking (nftables matching on the first few payload bytes
+  for `GET ` / `POST ` / `HEAD ` / `PUT ` — more accurate but adds CPU);
+- block plaintext-HTTP for the flagged client outright;
+- accept the leak (the threshold for sharing-detection is volume-based;
+  one-off requests usually don't trip it).
+
 ### Notes on the unchanged surface
 
 The UI (`htdocs/luci-static/resources/view/cquauth/*.js`), the ACL
