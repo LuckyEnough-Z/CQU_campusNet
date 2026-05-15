@@ -91,6 +91,13 @@ function get_ip(ifname) {
     return fetch_chkstatus(ifname).v46ip ?? 'N/A';
 }
 
+// 触发共享检测时, 调诊断脚本抓 conntrack/端口/DHCP 快照, 返回快照文件路径.
+// 详情见 /usr/share/cquauth/diag-sharing.sh
+function diagnose_sharing(ifname) {
+    const path = trim(safe_exec(sprintf('/usr/share/cquauth/diag-sharing.sh %s 2>/dev/null', ifname ?? 'unknown')));
+    return path != '' ? path : null;
+}
+
 const methods = {
     ping: {
         call: function() {
@@ -131,6 +138,19 @@ const methods = {
             const iface = req.args?.interface ?? 'eth0';
             const ip = get_ip(iface);
             return { ip };
+        }
+    },
+    // 手动抓一份共享检测诊断快照. 用于未触发但怀疑被检测时主动排查.
+    diagnose: {
+        args: { interface: 'string' },
+        call: function(req) {
+            const iface = req.args?.interface ?? 'eth0';
+            const path = diagnose_sharing(iface);
+            if (!path) {
+                return { success: false, message: '诊断脚本执行失败' };
+            }
+            log_ifname(iface, `手动诊断快照: ${path}`);
+            return { success: true, path: path };
         }
     },
     enable_ecmp: {
@@ -233,9 +253,13 @@ const methods = {
                 message = '本账号费用超支';
                 ret = 6;
             }
-            else if (index(msg, '共享上网') != -1 || index(msg, '等待5分钟') != -1) {
+            else if (index(msg, '共享上网') != -1 || index(msg, '等待5分钟') != -1 || index(msg, '请勿使用代理') != -1) {
                 message = '触发共享检测';
                 log_ifname(iface, '触发共享检测, 建议禁用http明文流量');
+                const diag = diagnose_sharing(iface);
+                if (diag) {
+                    log_ifname(iface, `诊断快照已写入: ${diag} (cat 查看, 看 http/uniq_sport 高的客户端)`);
+                }
                 ret = 7;
             }
             else {

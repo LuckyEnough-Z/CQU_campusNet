@@ -5,7 +5,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-cquauth
-PKG_VERSION:=1.0.3
+PKG_VERSION:=1.0.4
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=lurenjiamax <lurenjiamax@gmail.com>
@@ -18,7 +18,8 @@ include $(TOPDIR)/feeds/luci/luci.mk
 
 define Package/$(PKG_NAME)/postinst
 #!/bin/sh
-chmod 0755 /etc/init.d/cquauth_client /usr/bin/cquauth_client /usr/share/rpcd/ucode/cquauth
+chmod 0755 /etc/init.d/cquauth_client /usr/bin/cquauth_client \
+           /usr/share/rpcd/ucode/cquauth /usr/share/cquauth/diag-sharing.sh
 if [ -z "$${IPKG_INSTROOT}" ] && [ -f /tmp/cquauth.bak ]; then
         mv /tmp/cquauth.bak /etc/config/cquauth
 fi

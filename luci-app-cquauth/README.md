@@ -65,13 +65,42 @@ actually work on a stock ImmortalWrt install.
   `-f /tmp/cquauth.bak` so a fresh install no longer prints `mv: can't rename
   '/tmp/cquauth.bak': No such file or directory`.
 
+### Sharing-detection diagnostic (`root/usr/share/cquauth/diag-sharing.sh`)
+
+The portal periodically returns one of `共享上网` / `请勿使用代理` /
+`等待5分钟` when its server-side fingerprinting suspects multiple devices
+behind a single account (TTL mix, port-range entropy, UA diversity, plaintext
+HTTP, etc.). Upstream just retries; `cqu-net-auth` sleeps 300s. Neither
+records *which* LAN client most likely tripped the detector.
+
+When the new code sees that message in a login response (or when you call
+`ubus call cquauth diagnose '{"interface":"eth0.1"}'` on demand), it runs
+`/usr/share/cquauth/diag-sharing.sh`, which writes a snapshot to
+`/tmp/cquauth-sharing-<timestamp>.log`. The snapshot is generated entirely
+from `/proc/net/nf_conntrack` and `/tmp/dhcp.leases`, so there is no extra
+runtime dependency and no packet capture overhead. The path is also echoed
+to syslog (`logread -e cquauth`) so it's easy to find.
+
+The report contains, for every LAN-side source IP active in conntrack:
+
+- total conn count
+- TCP/80 (plaintext HTTP), TCP/443, UDP/53 counts (high HTTP ⇒ the obvious
+  signal for UA-based sharing detection)
+- unique source-port count and observed source-port range (wide range or
+  high uniqueness on one IP ⇒ multiple OS stacks NATed behind it)
+
+…plus a top-10 of outbound destinations and a copy of the DHCP lease table
+so each IP has a hostname/MAC next to it. The "hint" section at the bottom
+spells out how to read the numbers.
+
 ### Notes on the unchanged surface
 
 The UI (`htdocs/luci-static/resources/view/cquauth/*.js`), the ACL
-(`root/usr/share/rpcd/acl.d/luci-app-cquauth.json`), the menu entry, the ECMP
-routing logic and the multi-account / multi-interface configuration model are
-all preserved as-is from upstream. If you've configured the upstream version
-before, the same `/etc/config/cquauth` keeps working.
+(`root/usr/share/rpcd/acl.d/luci-app-cquauth.json` — extended only to grant
+the new `diagnose` method), the menu entry, the ECMP routing logic and the
+multi-account / multi-interface configuration model are all preserved as-is
+from upstream. If you've configured the upstream version before, the same
+`/etc/config/cquauth` keeps working.
 
 A logout RPC method is not implemented yet, even though `cqu-net-auth` ships one
 against `/eportal/portal/mac/unbind`. The upstream UI never called it, so this
