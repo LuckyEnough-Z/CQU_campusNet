@@ -15,3 +15,8 @@ tmp/
 # OS noise
 .DS_Store
 Thumbs.db
+
+# Windows-isms (Git Bash MSYS path conversion on /dev/null sometimes
+# creates a file named "nul" in the cwd when invoking ssh through wsl)
+nul
+**/nul
