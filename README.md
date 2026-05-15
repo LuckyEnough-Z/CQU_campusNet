@@ -15,7 +15,7 @@
 ## 前提条件
 
 - OpenWrt 路由器（nftables ≥ 1.1.1）
-- 已安装校园网认证插件 [luci-app-cquauth](https://github.com/lurenjiamax/luci-app-cquauth/tree/main)
+- 已安装校园网认证插件 [luci-app-cquauth](./luci-app-cquauth/)（本仓库内子目录, 适配 login.cqu.edu.cn 新认证端点的 fork）
 
 ## 部署步骤
 

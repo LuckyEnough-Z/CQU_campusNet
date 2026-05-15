@@ -1,0 +1,251 @@
+'use strict';
+
+import { popen } from 'fs';
+
+const LOGIN_HOST = 'login.cqu.edu.cn';
+
+// chkstatus JSONP: dr1002({"result":1,"uid":"...","v46ip":"...","time":"...","flow":"...","NID":"..."})
+// login JSONP:     dr1004({"result":1,"msg":"认证成功"})
+const match_dr_payload = /dr\d+\(([^)]+)\)/;
+const match_result    = /"result"\s*:\s*([0-9]+)/;
+const match_msg       = /"msg"\s*:\s*"([^"]*)"/;
+const match_uid       = /"uid"\s*:\s*"([^"]+)"/;
+const match_v46ip     = /"v46ip"\s*:\s*"([^"]+)"/;
+const match_time      = /"time"\s*:\s*"?([0-9]+)"?/;
+const match_flow      = /"flow"\s*:\s*"?([0-9]+)"?/;
+
+function safe_exec(cmd) {
+    return trim(popen(cmd)?.read?.('all') ?? '');
+}
+
+function exec(cmd) {
+    return popen(cmd)?.read?.('all') ?? '';
+}
+
+function log(msg) {
+    exec('logger -t cquauth_client ' + msg);
+}
+
+function log_ifname(ifname, msg) {
+    log(sprintf('[%s] %s', ifname, msg));
+}
+
+function url_encode(str) {
+    const hex = "0123456789ABCDEF";
+    let res = "";
+
+    for (let i = 0; i < length(str); i++) {
+        let c = substr(str, i, 1);
+        let code = ord(c);
+
+        if (
+            (code >= 48 && code <= 57) ||  // 0-9
+            (code >= 65 && code <= 90) ||  // A-Z
+            (code >= 97 && code <= 122) || // a-z
+            (c == "-" || c == "_" || c == "." || c == "~")
+        ) {
+            res += c;
+        } else if (code == 32) {
+            res += "%20";
+        } else if (code == 40) {
+            res += "(";
+        } else if (code == 41) {
+            res += ")";
+        } else {
+            res += "%" + substr(hex, (code >> 4) & 0xF, 1) + substr(hex, code & 0xF, 1);
+        }
+    }
+
+    return res;
+}
+
+function get_gw(ifname) {
+    if (!ifname) {
+        return 'N/A';
+    }
+    const cmd = sprintf('ip -j route show default | jq -r \'[.[] | select(.dev == %s)][0].gateway\'', ifname);
+    return exec(cmd);
+}
+
+// 调用 login.cqu.edu.cn/drcom/chkstatus, 解析 JSONP 内容
+function fetch_chkstatus(iface) {
+    const url = sprintf('http://%s/drcom/chkstatus?callback=dr1002&jsVersion=4.X&v=5505&lang=zh', LOGIN_HOST);
+    const cmd = sprintf('curl --user-agent "" --connect-timeout 5 "%s" --interface %s 2>/dev/null', url, iface);
+    const raw = safe_exec(cmd);
+    const payload = match(raw, match_dr_payload)?.[1] ?? '';
+    return {
+        raw: raw,
+        payload: payload,
+        v46ip: match(payload, match_v46ip)?.[1],
+        uid:   match(payload, match_uid)?.[1],
+        time:  match(payload, match_time)?.[1],
+        flow:  match(payload, match_flow)?.[1],
+        result: match(payload, match_result)?.[1]
+    };
+}
+
+function get_ip(ifname) {
+    if (!ifname) {
+        return 'N/A';
+    }
+    return fetch_chkstatus(ifname).v46ip ?? 'N/A';
+}
+
+const methods = {
+    ping: {
+        call: function() {
+            return { success: true };
+        }
+    },
+    service: {
+        args: { action: 'string' },
+        call: function(req) {
+            const action = req.args?.action ?? 'restart';
+            return exec(`/etc/init.d/cquauth_client ${action}`);
+        }
+    },
+    // 未登录时 chkstatus 不会返回 uid; 任一字段为 N/A 即视为未登录
+    get_status: {
+        args: { interface: 'string' },
+        call: function(req) {
+            const iface = req.args?.interface ?? 'eth0';
+            const info = fetch_chkstatus(iface);
+            log_ifname(iface, `chkstatus payload length: ${length(info.payload)}`);
+            if (length(info.payload) == 0) {
+                log_ifname(iface, `Please check your connection to ${LOGIN_HOST}`);
+            }
+            const status = {
+                time: info.time ?? 'N/A',
+                flow: info.flow ?? 'N/A',
+                uid:  info.uid  ?? 'N/A',
+                v4ip: info.v46ip ?? 'N/A'
+            };
+
+            log_ifname(iface, `Current status: time=${status.time}, flow=${status.flow}, uid=${status.uid}, v4ip=${status.v4ip}`);
+            return status;
+        }
+    },
+    get_ip: {
+        args: { interface: 'string' },
+        call: function(req) {
+            const iface = req.args?.interface ?? 'eth0';
+            const ip = get_ip(iface);
+            return { ip };
+        }
+    },
+    enable_ecmp: {
+        args: { interfaces: [], table: "main" },
+        call: function(req) {
+            const ifaces = req.args?.interfaces ?? [];
+            if (length(ifaces) == 0) {
+                log('Invalid interface name');
+                return { success: false, message: 'Invalid interface name' };
+            }
+            const nexthop_str = "nexthop via %s dev %s weight 1";
+            const nexthop_strs = join(' ', map(ifaces, ifname => sprintf(nexthop_str, get_gw(ifname), ifname)));
+            const cmd = sprintf('ip route table %s replace default %s', req.args?.table ?? "main", nexthop_strs);
+            const result = exec(cmd);
+            log(`Enable ecmp: ${result} ${cmd}`);
+            return { success: result == '', message: 'Enable ecmp routing' };
+        }
+    },
+    login: {
+        args: {
+            user: 'string',
+            pass: 'string',
+            interface: 'string',
+            ua: 'string',
+            terminal_type: 'string'
+        },
+        call: function(req) {
+            const args = req.args;
+            if (!args.user || !args.pass || !args.ua || !args.interface || !args.terminal_type) {
+                log('参数不完整, 请检查配置文件');
+                return { success: false, message: '参数不完整' };
+            }
+            const callback  = (args.terminal_type == 'phone') ? 'dr1005'   : 'dr1004';
+            const prefix    = (args.terminal_type == 'phone') ? '%2C1%2C'  : '%2C0%2C';
+            const term_type = (args.terminal_type == 'phone') ? '2'        : '1';
+            const iface = args.interface ?? 'eth0';
+
+            log_ifname(iface, `logining, account: ${args.user}, terminal_type: ${args.terminal_type}`);
+            const ip = get_ip(iface);
+            log_ifname(iface, `Resolved IP: ${ip ?? 'N/A'}`);
+            if (ip == 'N/A') {
+                log_ifname(iface, '无法获取IP地址');
+                return { success: false, message: '无法获取IP地址' };
+            }
+            const url = sprintf(
+                'http://%s:801/eportal/portal/login?callback=%s&login_method=1&user_account=%s%s&user_password=%s&wlan_user_ip=%s&wlan_user_ipv6=&wlan_user_mac=000000000000&wlan_ac_ip=&wlan_ac_name=&term_ua=%s&term_type=%s&jsVersion=4.2.2&terminal_type=%s&lang=zh-cn&v=1176&lang=zh-cn',
+                LOGIN_HOST, callback, prefix, url_encode(args.user), url_encode(args.pass), ip, url_encode(args.ua), term_type, term_type
+            );
+            log_ifname(iface, `Generated URL: ${substr(url, 43, 150)}...`);
+
+            const cmd = sprintf(
+                'curl --connect-timeout 5 --header "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6" ' +
+                '--header "Connection: keep-alive" --header "Referer: http://%s/" ' +
+                '--user-agent "%s" "%s" --interface %s 2>/dev/null',
+                LOGIN_HOST, args.ua, url, iface
+            );
+            let success = false, message, ret;
+            const raw = safe_exec(cmd);
+            log_ifname(iface, `Login command output length: ${length(raw)}`);
+            if (length(raw) == 0) {
+                log_ifname(iface, `Check your connection to ${LOGIN_HOST}`);
+                ret = 21;
+                message = '无法连接到认证服务器';
+                return { success, message, ret, result: raw };
+            }
+
+            const payload = match(raw, match_dr_payload)?.[1];
+            if (!payload) {
+                ret = 1;
+                message = '响应格式异常';
+                log_ifname(iface, `Login response not JSONP: ${substr(raw, 0, 200)}`);
+                return { success, message, ret, result: raw };
+            }
+            const result_code = +(match(payload, match_result)?.[1] ?? '0');
+            const msg = match(payload, match_msg)?.[1] ?? '';
+
+            if (result_code == 1) {
+                success = true;
+                message = msg || '认证成功';
+                ret = 0;
+            }
+            else if (index(msg, '密码错误') != -1) {
+                message = '密码错误';
+                ret = 2;
+            }
+            else if (index(msg, '账号不存在') != -1) {
+                message = '账号不存在';
+                ret = 3;
+            }
+            else if (index(msg, '认证异常') != -1) {
+                message = '认证异常';
+                ret = 4;
+            }
+            else if (index(msg, '认证操作非本机终端') != -1) {
+                message = '认证操作非本机终端';
+                log_ifname(iface, '请检查出口IP和接口是否正确');
+                ret = 5;
+            }
+            else if (index(msg, '本账号费用超支') != -1) {
+                message = '本账号费用超支';
+                ret = 6;
+            }
+            else if (index(msg, '共享上网') != -1 || index(msg, '等待5分钟') != -1) {
+                message = '触发共享检测';
+                log_ifname(iface, '触发共享检测, 建议禁用http明文流量');
+                ret = 7;
+            }
+            else {
+                message = msg ? ('其他错误: ' + msg) : '其他错误';
+                ret = 20;
+            }
+            log_ifname(iface, `Login result: success=${success}, message=${message}, payload=${substr(payload, 0, 100)}`);
+            return { success, message, ret, result: payload };
+        }
+    }
+};
+log('Service started');
+return { 'cquauth': methods };

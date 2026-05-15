@@ -1,0 +1,162 @@
+#!/usr/bin/lua
+
+local uci = require "luci.model.uci"
+local ctx = uci.cursor()
+local ubus = require "ubus"
+
+local ENABLED = tonumber(ctx:get("cquauth", "basic", "enabled")) == 1 or 0
+local PING_TARGET = ctx:get("cquauth", "basic", "ping_target") or "223.5.5.5"
+local CHECK_INTERVAL = tonumber(ctx:get("cquauth", "basic", "check_interval")) or 60
+local MAX_ATTEMPTS = tonumber(ctx:get("cquauth", "basic", "max_attempts")) or 0
+local LOGIN_SERVER = "login.cqu.edu.cn"
+local ENABLE_ECMP = tonumber(ctx:get("cquauth", "basic", "enable_ecmp")) == 1 or 0
+local ECMP_TABLE = tostring(ctx:get("cquauth", "basic", "ecmp_table")) or "main"
+
+local auth_retry_state = {}
+
+local function log(msg)
+    os.execute(string.format("logger -t cquauth_client '%s'", msg:gsub("'", "'\\''")))
+end
+
+local function log_ifname(ifname, msg)
+    log(string.format("[%s] %s", ifname, msg))
+end
+
+-- TODO: skip ipv6 interfaces
+local function get_wan_zone_ifaces()
+    local result = ctx:get("firewall", "zone_wan", "network")
+    return result or {}
+end
+
+local function check_authserver(ifname)
+    if not ifname then
+        log("无效网络接口: " .. (ifname or "nil"))
+        return false
+    end
+    local cmd = string.format("ping -c 4 -W 2 -I %s %s >/dev/null 2>&1", ifname, LOGIN_SERVER)
+    return os.execute(cmd) == 0
+end
+
+local function check_network(ifname, timeout)
+    if not ifname then
+        log("无效网络接口: " .. (ifname or "nil"))
+        return false
+    end
+    local cmd = string.format("ping -c 4 -W %d -I %s %s >/dev/null 2>&1", timeout, ifname, PING_TARGET)
+    return os.execute(cmd) == 0
+end
+
+-- 通过 chkstatus.uid 判断是否已认证 (校园网会放行 alibaba DNS 当 ping 白名单, 因此不能用 ping 判定)
+local function is_authenticated(conn, ifname)
+    if not ifname then return false end
+    local ok, status = pcall(conn.call, conn, "cquauth", "get_status", { interface = ifname })
+    if not ok or not status then return false end
+    return status.uid ~= nil and status.uid ~= "" and status.uid ~= "N/A"
+end
+
+local function auth_account(conn, config)
+    local result = conn:call("cquauth", "login", {
+        user = config.user,
+        pass = config.pass,
+        interface = config.interface,
+        ua = config.ua,
+        terminal_type = config.terminal_type
+    })
+
+    if result and result.success then
+        log_ifname(config.interface, string.format("认证成功: %s", config.user))
+        local status = conn:call("cquauth", "get_status", { interface = config.interface })
+        if status then
+            log_ifname(config.interface, string.format("UID: %s, Time: %s, Flow: %s, IP: %s",
+                status.uid or "N/A", status.time or "N/A", status.flow or "N/A", status.v4ip or "N/A"))
+        end
+        return true
+    else
+        log_ifname(config.interface, string.format("认证失败: %s - %s", config.user, result and result.message or "未知错误"))
+        log_ifname(config.interface, result and result.result or "N/A")
+        return false
+    end
+end
+
+local function ecmp_with_failover(conn, ecmp_ifaces, wan_ifaces)
+    -- Check any rest interfaces in wan Zone available for failover
+    if #ecmp_ifaces == 0 then
+        if #wan_ifaces == 0 then
+            log("没有可用的接口")
+            return
+        end
+        for _, iface in ipairs(wan_ifaces) do
+            if check_network(iface, 1) then
+                table.insert(ecmp_ifaces, iface)
+                break
+            end
+        end
+    end
+    -- Enable ecmp, works for both single and multiple interfaces
+    local result = conn:call("cquauth", "enable_ecmp", { interfaces = ecmp_ifaces, table = ECMP_TABLE })
+    if result and result.success then
+        log("ECMP 已启用")
+    else
+        log("ECMP 启用失败: " .. (result and result.message or "未知错误"))
+    end
+end
+
+while true do
+    local success, err = pcall(function()
+        if ENABLED == 0 then
+            return
+        end
+        -- TODO: Add weights options, maybe
+        local ecmp_ifaces = {}
+        local wan_ifaces = get_wan_zone_ifaces()
+        local conn = ubus.connect(nil, 500)
+        if not conn then
+            log("无法连接到 ubusd")
+            return
+        end
+        ctx:foreach("cquauth", "account", function(s)
+            if s.enabled == "1" then
+                local config = {
+                    user = s.user or "",
+                    pass = s.pass or "",
+                    ua = s.ua or "",
+                    interface = s.interface or "",
+                    terminal_type = s.terminal_type or "pc"
+                }
+                if not auth_retry_state[config.interface] then
+                    auth_retry_state[config.interface] = 0
+                end
+                if not is_authenticated(conn, config.interface) then
+                    log_ifname(config.interface, "未认证: 开始认证")
+                    if not check_authserver(config.interface) then
+                        log_ifname(config.interface, "无法连接认证服务器, 尝试 ifup")
+                        os.execute("ifup " .. config.interface)
+                    end
+                    local success = auth_account(conn, config)
+                    if success then
+                        auth_retry_state[config.interface] = 0
+                    else
+                        auth_retry_state[config.interface] = auth_retry_state[config.interface] + 1
+                        if MAX_ATTEMPTS > 0 and auth_retry_state[config.interface] >= MAX_ATTEMPTS then
+                            log_ifname(config.interface, "认证失败次数达到上限，禁用账户")
+                            ctx:set("cquauth", s['.name'], "enabled", "0")
+                            ctx:commit("cquauth")
+                        end
+                    end
+                elseif ENABLE_ECMP == 1 then
+                    table.insert(ecmp_ifaces, config.interface)
+                    -- remove_value(wan_ifaces, config.interface)
+                end
+            end
+        end)
+        if ENABLE_ECMP == 1 then
+            ecmp_with_failover(conn, ecmp_ifaces, wan_ifaces)
+        end
+        conn:close()
+    end)
+    log("Sleeping..")
+    if not success then
+        log("程序错误: " .. err)
+    end
+    os.execute("sleep " .. CHECK_INTERVAL)
+end

@@ -1,0 +1,17 @@
+{
+    "luci-app-cquauth": {
+        "description": "CQU Auth Client access",
+        "read": {
+            "ubus": {
+                "cquauth": ["get_status", "login"]
+            },
+            "uci": ["cquauth"]
+        },
+        "write": {
+            "ubus": {
+                "cquauth": ["login"]
+            },
+            "uci": ["cquauth"]
+        }
+    }
+}

@@ -1,0 +1,46 @@
+#!/bin/sh
+# login.cqu.edu.cn resolves to an RFC1918 address (10.10.8.162); dnsmasq's
+# rebind protection drops that answer by default. Whitelist cqu.edu.cn so the
+# daemon can reach the portal pre-auth.
+#
+# Note: on ImmortalWrt 24.10 (mt76x8 build), `uci add_list dhcp.@dnsmasq[0].
+# rebind_domain=...` reports success but is silently reverted before commit
+# writes the file (something appends a matching del_list to the change set).
+# We therefore patch /etc/config/dhcp in place with awk. Idempotent.
+if [ -f /etc/config/dhcp ] && ! grep -q "list rebind_domain 'cqu.edu.cn'" /etc/config/dhcp 2>/dev/null; then
+    awk 'BEGIN{q=sprintf("%c",39)}
+        /^config dnsmasq/ && !d {
+            print
+            print "\tlist rebind_domain " q "cqu.edu.cn" q
+            d=1; next
+        }
+        { print }
+    ' /etc/config/dhcp > /tmp/_cqu_dhcp && mv /tmp/_cqu_dhcp /etc/config/dhcp
+    /etc/init.d/dnsmasq restart >/dev/null 2>&1
+fi
+
+if [ -s /etc/config/cquauth ]; then
+    echo "Config file is not empty, skip"
+    exit 0
+fi
+
+touch /etc/config/cquauth
+uci -q batch <<EOF
+set cquauth.basic='basic'
+set cquauth.basic.enabled='1'
+set cquauth.basic.ping_target='223.5.5.5'
+set cquauth.basic.check_interval='60'
+set cquauth.basic.max_attempts='0'
+set cquauth.basic.enable_ecmp='0'
+
+add cquauth account
+set cquauth.@account[-1].enabled='0'
+set cquauth.@account[-1].user='20202020'
+set cquauth.@account[-1].pass='123456'
+set cquauth.@account[-1].interface='eth0'
+set cquauth.@account[-1].ua='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 Edg/134.0.0.0'
+set cquauth.@account[-1].terminal_type='pc'
+
+commit cquauth
+EOF
+exit 0

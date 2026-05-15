@@ -1,0 +1,13 @@
+{
+    "admin/services/cquauth": {
+        "title": "CQU Auth Client",
+        "order": 60,
+        "action": {
+            "type": "view",
+            "path": "cquauth/main"
+        },
+        "depends": {
+            "acl": ["luci-app-cquauth"]
+        }
+    }
+}

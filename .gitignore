@@ -1,0 +1,17 @@
+# IDE
+.idea/
+*.iml
+
+# Empty IntelliJ src/ dir at fork root
+luci-app-cquauth/src/
+
+# Build / staging
+build_dir/
+staging_dir/
+tmp/
+*.o
+*.so
+
+# OS noise
+.DS_Store
+Thumbs.db
