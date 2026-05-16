@@ -1,6 +1,8 @@
 # IDE
 .idea/
 *.iml
+# File
+OpenWrt 旁路由配置.pdf
 
 # Empty IntelliJ src/ dir at fork root
 luci-app-cquauth/src/
