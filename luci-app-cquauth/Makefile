@@ -5,14 +5,16 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-cquauth
-PKG_VERSION:=1.0.5
+PKG_VERSION:=1.0.6
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=lurenjiamax <lurenjiamax@gmail.com>
 
 LUCI_TITLE:=CQU Auth (Chongqing University Authentication)
 LUCI_PKGARCH:=all
-LUCI_DEPENDS:=+curl
+# 1.0.6: 改用 uclient-fetch (OpenWrt 基础组件, 不怕固件 curl/libcurl 版本不匹配),
+# 并补上 get_gw 真正依赖的 jq (1.0.5 漏声明导致部分固件 jq 缺失).
+LUCI_DEPENDS:=+jq +uclient-fetch
 
 include $(TOPDIR)/feeds/luci/luci.mk
 

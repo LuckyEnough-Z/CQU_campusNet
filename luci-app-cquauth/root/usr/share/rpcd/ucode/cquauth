@@ -70,7 +70,9 @@ function get_gw(ifname) {
 // 调用 login.cqu.edu.cn/drcom/chkstatus, 解析 JSONP 内容
 function fetch_chkstatus(iface) {
     const url = sprintf('http://%s/drcom/chkstatus?callback=dr1002&jsVersion=4.X&v=5505&lang=zh', LOGIN_HOST);
-    const cmd = sprintf('curl --user-agent "" --connect-timeout 5 "%s" --interface %s 2>/dev/null', url, iface);
+    // 用 uclient-fetch 而非 curl: 部分固件 curl 与 libcurl 版本不匹配会 symbol-not-found,
+    // uclient-fetch 是 OpenWrt 基础组件, 更可靠且无依赖. 单 WAN 下无需 --interface.
+    const cmd = sprintf('uclient-fetch -q -T 5 -O - "%s" 2>/dev/null', url);
     const raw = safe_exec(cmd);
     const payload = match(raw, match_dr_payload)?.[1] ?? '';
     return {
@@ -201,11 +203,11 @@ const methods = {
             );
             log_ifname(iface, `Generated URL: ${substr(url, 43, 150)}...`);
 
+            // uclient-fetch 不支持任意 --header/--interface; 认证逻辑全在 URL query
+            // (term_ua 已 url_encode 在 URL 内), drcom eportal 不强校验 Referer/UA 头.
             const cmd = sprintf(
-                'curl --connect-timeout 5 --header "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6" ' +
-                '--header "Connection: keep-alive" --header "Referer: http://%s/" ' +
-                '--user-agent "%s" "%s" --interface %s 2>/dev/null',
-                LOGIN_HOST, args.ua, url, iface
+                'uclient-fetch -q -T 5 -O - "%s" 2>/dev/null',
+                url
             );
             let success = false, message, ret;
             const raw = safe_exec(cmd);
