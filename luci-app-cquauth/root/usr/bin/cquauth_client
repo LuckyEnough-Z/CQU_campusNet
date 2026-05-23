@@ -4,13 +4,16 @@ local uci = require "luci.model.uci"
 local ctx = uci.cursor()
 local ubus = require "ubus"
 
-local ENABLED = tonumber(ctx:get("cquauth", "basic", "enabled")) == 1 or 0
-local PING_TARGET = ctx:get("cquauth", "basic", "ping_target") or "223.5.5.5"
-local CHECK_INTERVAL = tonumber(ctx:get("cquauth", "basic", "check_interval")) or 60
-local MAX_ATTEMPTS = tonumber(ctx:get("cquauth", "basic", "max_attempts")) or 0
+-- 1.0.7: 把 uci 配置项移到每轮 while 里重读 (见底部 while), 这里只声明 + 给安全默认.
+-- 这样 LuCI 改完 commit 后, 即使 procd 不触发 reload, 下个轮询周期也能拿到新值.
+-- 与 /etc/init.d/cquauth_client 的 service_triggers 形成双保险.
 local LOGIN_SERVER = "login.cqu.edu.cn"
-local ENABLE_ECMP = tonumber(ctx:get("cquauth", "basic", "enable_ecmp")) == 1 or 0
-local ECMP_TABLE = tostring(ctx:get("cquauth", "basic", "ecmp_table")) or "main"
+local ENABLED = 0
+local PING_TARGET = "223.5.5.5"
+local CHECK_INTERVAL = 60
+local MAX_ATTEMPTS = 0
+local ENABLE_ECMP = 0
+local ECMP_TABLE = "main"
 
 local auth_retry_state = {}
 
@@ -102,6 +105,15 @@ local function ecmp_with_failover(conn, ecmp_ifaces, wan_ifaces)
 end
 
 while true do
+    -- 1.0.7: 每轮重读 uci, 让 LuCI 改账号/切 phone-pc/调 enabled 等不依赖 daemon 重启就生效
+    ctx:load("cquauth")
+    ENABLED = tonumber(ctx:get("cquauth", "basic", "enabled")) == 1 or 0
+    PING_TARGET = ctx:get("cquauth", "basic", "ping_target") or "223.5.5.5"
+    CHECK_INTERVAL = tonumber(ctx:get("cquauth", "basic", "check_interval")) or 60
+    MAX_ATTEMPTS = tonumber(ctx:get("cquauth", "basic", "max_attempts")) or 0
+    ENABLE_ECMP = tonumber(ctx:get("cquauth", "basic", "enable_ecmp")) == 1 or 0
+    ECMP_TABLE = tostring(ctx:get("cquauth", "basic", "ecmp_table")) or "main"
+
     local success, err = pcall(function()
         if ENABLED == 0 then
             return

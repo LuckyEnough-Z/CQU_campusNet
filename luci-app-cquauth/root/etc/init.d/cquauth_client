@@ -25,3 +25,14 @@ start_service() {
 stop_service() {
     killall cquauth_client
 }
+
+reload_service() {
+    stop
+    start
+}
+
+# 监听 /etc/config/cquauth 变更, LuCI/uci commit cquauth 后 procd 自动 reload daemon
+# (修复 1.0.6 之前漏 service_triggers 导致改账号/切 phone-pc 需手动重启的问题)
+service_triggers() {
+    procd_add_reload_trigger "cquauth"
+}

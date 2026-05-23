@@ -5,15 +5,18 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-cquauth
-PKG_VERSION:=1.0.6
+PKG_VERSION:=1.0.7
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=lurenjiamax <lurenjiamax@gmail.com>
 
 LUCI_TITLE:=CQU Auth (Chongqing University Authentication)
 LUCI_PKGARCH:=all
+# 1.0.7: init 加 service_triggers (procd_add_reload_trigger "cquauth") + reload_service,
+#        lua daemon 把 uci 读移到 while 循环每轮重读 + ctx:load("cquauth").
+#        修复改账号/切 phone-pc 需要手动 restart cquauth_client 的 bug.
 # 1.0.6: 改用 uclient-fetch (OpenWrt 基础组件, 不怕固件 curl/libcurl 版本不匹配),
-# 并补上 get_gw 真正依赖的 jq (1.0.5 漏声明导致部分固件 jq 缺失).
+#        并补上 get_gw 真正依赖的 jq (1.0.5 漏声明导致部分固件 jq 缺失).
 LUCI_DEPENDS:=+jq +uclient-fetch
 
 include $(TOPDIR)/feeds/luci/luci.mk
