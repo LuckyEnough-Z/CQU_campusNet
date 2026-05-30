@@ -1,6 +1,6 @@
 # CQU CampusNet
 
-重庆大学校园网认证绕过方案 —— 基于 OpenWrt 的 TPROXY 透明代理 + UA3F User-Agent 伪装
+重庆大学校园网多设备认证
 
 ## 工作原理
 
@@ -294,18 +294,6 @@ service tproxy_service restart
 # IPv6 如需恢复，按需 uci 还原 dhcp.lan/network.wan6 并去掉 sysctl 行
 ```
 
-### 关于日志里的 hev-socks5-tproxy `[E]` 报错
-
-```
-daemon.err hev-socks5-tproxy[...]: [E] 0x... socks5 session handshake
-daemon.err hev-socks5-tproxy[...]: [E] 0x... socks5 client read response
-```
-
-这是**上游（校园门户）短暂不可达**时，hev 把客户端连接交给 ua3f 但拨号失败造成的，
-认证恢复后自动消失，**无需处理**。拓宽拦截后（P1）任何校园断网/重认证窗口都会出现
-更多这类 `daemon.err`，仍属正常自愈噪音，可作为上游中断的信号。
-（`uhttpd ... accepted login` 是正常的 LuCI 登录记录，非错误。）
-
 ## 替代部署：旁路由 + OpenClash
 
 若不想把 OpenWrt 作为主路由，可作为**旁路由**（如 `lan` 设为 `192.168.1.2`、网关指向
@@ -327,7 +315,7 @@ IPv6 关闭（P0）、固定 TTL（P2）、单一 UA 同样适用于该拓扑。
 ## 参考链接
 
 - [luci-app-cquauth 认证插件](https://github.com/lurenjiamax/luci-app-cquauth)
-- [UA3F 项目](https://github.com/SunBK201/UA3F)
+- [UA3F](https://github.com/SunBK201/UA3F)
 - [UA3F 与 Clash 全教程](https://blog.sunbk201.site/posts/ua3f/)
 - [hev-socks5-tproxy](https://github.com/heiher/hev-socks5-tproxy)
 - [使用 UA2F](https://blog.krytro.com/blogs/daily/240322.html)
@@ -335,7 +323,6 @@ IPv6 关闭（P0）、固定 TTL（P2）、单一 UA 同样适用于该拓扑。
 - [cqu-net-auth Python 认证脚本](https://github.com/haowang02/cqu-net-auth)
 - [UA3F/Clash 安装文档（旁路由方案）](https://sunbk201public.notion.site/UA3F-Clash-16d60a7b5f0e457a9ee97a3be7cbf557)
 - [OpenClash 项目](https://github.com/vernesong/OpenClash)
-- 《OpenWrt 旁路由配置.pdf》（旁路由 + OpenClash 本地部署备忘，未纳入仓库）
 
 ## 致谢
 
