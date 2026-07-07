@@ -1,12 +1,8 @@
 #!/bin/sh /etc/rc.common
 
 USE_PROCD=1
-START=95
+START=99
 DEPENDS="rpcd"
-
-boot() {
-    service_start /usr/sbin/rpcd -f
-}
 
 setup_sysctl() {
     sysctl -p /etc/sysctl.d/20-ecmp.conf >/dev/null 2>&1
