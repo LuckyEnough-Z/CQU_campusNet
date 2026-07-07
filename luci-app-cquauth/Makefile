@@ -5,13 +5,17 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-cquauth
-PKG_VERSION:=1.0.7
+PKG_VERSION:=1.0.8
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=lurenjiamax <lurenjiamax@gmail.com>
 
 LUCI_TITLE:=CQU Auth (Chongqing University Authentication)
 LUCI_PKGARCH:=all
+# 1.0.8: 修复开机不自启 + ctx:load 竞态 + ipk 文件所有者问题.
+#        init: 删除 boot() 函数 (它阻止 start_service 执行), START=95→99 (晚启动等 ubus 就绪).
+#        lua: ctx:load("cquauth") 失败时跳过本轮 (不空转), ENABLED/ENABLE_ECMP 改为 (tonumber()==1) and 1 or 0 确保是数字.
+#        ipk: 打包时用 tar --owner=0 --group=0 强制 root, 防止 UID 1000 泄露导致 LuCI 不显示启动项.
 # 1.0.7: init 加 service_triggers (procd_add_reload_trigger "cquauth") + reload_service,
 #        lua daemon 把 uci 读移到 while 循环每轮重读 + ctx:load("cquauth").
 #        修复改账号/切 phone-pc 需要手动 restart cquauth_client 的 bug.

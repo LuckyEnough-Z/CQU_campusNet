@@ -106,18 +106,25 @@ end
 
 while true do
     -- 1.0.7: 每轮重读 uci, 让 LuCI 改账号/切 phone-pc/调 enabled 等不依赖 daemon 重启就生效
-    ctx:load("cquauth")
-    ENABLED = tonumber(ctx:get("cquauth", "basic", "enabled")) == 1 or 0
-    PING_TARGET = ctx:get("cquauth", "basic", "ping_target") or "223.5.5.5"
-    CHECK_INTERVAL = tonumber(ctx:get("cquauth", "basic", "check_interval")) or 60
-    MAX_ATTEMPTS = tonumber(ctx:get("cquauth", "basic", "max_attempts")) or 0
-    ENABLE_ECMP = tonumber(ctx:get("cquauth", "basic", "enable_ecmp")) == 1 or 0
-    ECMP_TABLE = tostring(ctx:get("cquauth", "basic", "ecmp_table")) or "main"
+    -- 1.0.8: 修复 ctx:load 开机早期可能失败导致配置读空 + 优先级 bug
+    local load_ok = pcall(ctx.load, ctx, "cquauth")
+    if not load_ok then
+        log("uci load cquauth 失败, 跳过本轮")
+        os.execute("sleep " .. CHECK_INTERVAL)
+    else
+        local enabled_raw = ctx:get("cquauth", "basic", "enabled")
+        ENABLED = (tonumber(enabled_raw) == 1) and 1 or 0
+        PING_TARGET = ctx:get("cquauth", "basic", "ping_target") or "223.5.5.5"
+        CHECK_INTERVAL = tonumber(ctx:get("cquauth", "basic", "check_interval")) or 60
+        MAX_ATTEMPTS = tonumber(ctx:get("cquauth", "basic", "max_attempts")) or 0
+        local ecmp_raw = ctx:get("cquauth", "basic", "enable_ecmp")
+        ENABLE_ECMP = (tonumber(ecmp_raw) == 1) and 1 or 0
+        ECMP_TABLE = tostring(ctx:get("cquauth", "basic", "ecmp_table")) or "main"
 
-    local success, err = pcall(function()
-        if ENABLED == 0 then
-            return
-        end
+        local success, err = pcall(function()
+            if ENABLED == 0 then
+                return
+            end
         -- TODO: Add weights options, maybe
         local ecmp_ifaces = {}
         local wan_ifaces = get_wan_zone_ifaces()
@@ -171,4 +178,5 @@ while true do
         log("程序错误: " .. err)
     end
     os.execute("sleep " .. CHECK_INTERVAL)
+    end -- end of else (load_ok)
 end
