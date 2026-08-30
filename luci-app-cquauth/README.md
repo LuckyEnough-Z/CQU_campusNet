@@ -25,15 +25,32 @@ actually work on a stock ImmortalWrt install.
 
 ### LuCI daemon (`root/usr/bin/cquauth_client`)
 
-- `LOGIN_SERVER` constant switched from `10.254.7.4` to `login.cqu.edu.cn`.
+- Auth host switched from the hard-coded `10.254.7.4` to `login.cqu.edu.cn`
+  (resolved via DNS; see the installer note about `rebind_domain` below).
 - **Authentication-state detection rewritten.** Upstream pinged `223.5.5.5`
   (Alibaba public DNS) to decide whether re-auth was needed. On the new portal,
   Alibaba DNS is part of the pre-auth allowlist — the ping always succeeds and
-  the daemon never re-authenticates. This fork adds `is_authenticated(conn, ifname)`
-  which calls `ubus cquauth get_status` and treats the account as authenticated
-  iff `uid` is present (and not `"N/A"`). This matches the behaviour of
-  [`cqu-net-auth`](#acknowledgements)'s Python implementation, which uses the
-  same `chkstatus` field for the decision.
+  the daemon never re-authenticates. This fork instead calls
+  `ubus cquauth get_status` and decides from the `chkstatus` response, matching
+  the behaviour of [`cqu-net-auth`](#acknowledgements)'s Python implementation,
+  which uses the same field.
+- **Three-state portal check (1.0.9).** `portal_state(conn, ifname)` returns
+  `online` / `offline` / `unreachable` instead of a bare boolean. The distinction
+  matters: an empty `chkstatus` response means *the portal could not be reached*,
+  which is not the same as *the portal says you are logged out*. Earlier versions
+  conflated the two, so a single transient failure was read as "logged out".
+- **`ifup` is no longer a reflex (1.0.9).** When the portal is unreachable the
+  daemon first checks the link with `iface_link_ok()` (ubus
+  `network.interface.<name>.status`: `up` + an IPv4 address + a default route)
+  and does nothing if the link is healthy. `ifup` on a `proto=dhcp` interface
+  *releases the current lease* before re-discovering, so calling it while the
+  link is fine tears down working connectivity — observed in the field as a
+  20-minute outage caused by one empty `chkstatus` response, with the 60-second
+  retry loop interrupting each in-flight DHCP exchange. When `ifup` genuinely is
+  needed it is rate-limited (`IFUP_MIN_INTERVAL`, 300 s) and followed by polling
+  for readiness (`IFUP_WAIT`, 30 s) rather than an immediate auth attempt. As a
+  safety net, a portal that stays unreachable while the link is healthy still
+  triggers a blind login attempt every `UNREACH_AUTH_AFTER` (3) rounds.
 
 ### Installer (`root/etc/uci-defaults/80_cquauth`)
 

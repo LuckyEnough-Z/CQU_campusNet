@@ -5,13 +5,20 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-cquauth
-PKG_VERSION:=1.0.8
+PKG_VERSION:=1.0.9
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=lurenjiamax <lurenjiamax@gmail.com>
 
 LUCI_TITLE:=CQU Auth (Chongqing University Authentication)
 LUCI_PKGARCH:=all
+# 1.0.9: 修复"自救反而弄断网"的 bug: 一次瞬时 chkstatus 空响应会导致 ifup 释放正常
+#        的 DHCP 租约, 每 60s 重复一次打断进行中的 DHCP, 实测造成 20 分钟断网.
+#        lua: is_authenticated(bool) -> portal_state(三态 online/offline/unreachable);
+#             新增 iface_link_ok() 用 ubus 查 up+IPv4+默认路由, 链路正常时绝不 ifup;
+#             真需要 ifup 时加 300s 退避, 且改为轮询等接口就绪(最多 30s)再认证;
+#             删掉 check_authserver/LOGIN_SERVER (ping 判定已被链路检查取代).
+#        ucode: get_status 增加 reachable 字段, 区分"门户说未登录"和"门户连不上".
 # 1.0.8: 修复开机不自启 + ctx:load 竞态 + ipk 文件所有者问题.
 #        init: 删除 boot() 函数 (它阻止 start_service 执行), START=95→99 (晚启动等 ubus 就绪).
 #        lua: ctx:load("cquauth") 失败时跳过本轮 (不空转), ENABLED/ENABLE_ECMP 改为 (tonumber()==1) and 1 or 0 确保是数字.

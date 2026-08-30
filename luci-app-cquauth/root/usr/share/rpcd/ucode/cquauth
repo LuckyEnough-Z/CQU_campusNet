@@ -127,7 +127,10 @@ const methods = {
                 time: info.time ?? 'N/A',
                 flow: info.flow ?? 'N/A',
                 uid:  info.uid  ?? 'N/A',
-                v4ip: info.v46ip ?? 'N/A'
+                v4ip: info.v46ip ?? 'N/A',
+                // 1.0.9: 暴露门户可达性. 没有它, daemon 无法区分"门户说未登录"(payload 有内容但无 uid)
+                // 和"门户根本连不上"(payload 为空) —— 后者被当成前者会触发 ifup 释放正常的 DHCP 租约.
+                reachable: length(info.payload) > 0
             };
 
             log_ifname(iface, `Current status: time=${status.time}, flow=${status.flow}, uid=${status.uid}, v4ip=${status.v4ip}`);

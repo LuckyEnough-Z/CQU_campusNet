@@ -7,7 +7,6 @@ local ubus = require "ubus"
 -- 1.0.7: 把 uci 配置项移到每轮 while 里重读 (见底部 while), 这里只声明 + 给安全默认.
 -- 这样 LuCI 改完 commit 后, 即使 procd 不触发 reload, 下个轮询周期也能拿到新值.
 -- 与 /etc/init.d/cquauth_client 的 service_triggers 形成双保险.
-local LOGIN_SERVER = "login.cqu.edu.cn"
 local ENABLED = 0
 local PING_TARGET = "223.5.5.5"
 local CHECK_INTERVAL = 60
@@ -15,7 +14,14 @@ local MAX_ATTEMPTS = 0
 local ENABLE_ECMP = 0
 local ECMP_TABLE = "main"
 
+-- 1.0.9: ifup 自救的护栏, 见下方 portal_state / iface_link_ok.
+local IFUP_MIN_INTERVAL = 300   -- 两次 ifup 的最小间隔(秒), 防止每轮都打断进行中的 DHCP
+local IFUP_WAIT = 30            -- ifup 后等接口拿到 IP+默认路由的最长时间(秒)
+local UNREACH_AUTH_AFTER = 3    -- 门户不可达但链路正常时, 每这么多轮兜底盲试一次认证
+
 local auth_retry_state = {}
+local last_ifup_at = {}     -- [iface] = os.time(), ifup 退避
+local unreach_rounds = {}   -- [iface] = 连续"门户不可达"的轮数
 
 local function log(msg)
     os.execute(string.format("logger -t cquauth_client '%s'", msg:gsub("'", "'\\''")))
@@ -31,13 +37,33 @@ local function get_wan_zone_ifaces()
     return result or {}
 end
 
-local function check_authserver(ifname)
-    if not ifname then
-        log("无效网络接口: " .. (ifname or "nil"))
-        return false
+-- 1.0.9: 链路是否真的可用 = 已 up + 有 IPv4 地址 + 有默认路由.
+-- 这是 ifup 的前置判断, 只有链路真断了才该 ifup.
+-- 背景: ifup 对 proto=dhcp 的接口会先 release 掉当前租约再重新 discover.
+-- 在链路本来正常时调用它, 等于亲手把好好的网络弄断 —— 1.0.8 及之前就是这么炸的:
+-- 一次瞬时的 chkstatus 空响应 -> 误判未认证 -> ifup -> 释放正常租约 -> 20 分钟断网.
+local function iface_link_ok(conn, ifname)
+    if not ifname then return false end
+    local ok, st = pcall(conn.call, conn, "network.interface." .. ifname, "status", {})
+    if not ok or type(st) ~= "table" or st.up ~= true then return false end
+    local addrs = st["ipv4-address"]
+    if type(addrs) ~= "table" or #addrs == 0 then return false end
+    local routes = st.route
+    if type(routes) ~= "table" then return false end
+    for _, r in ipairs(routes) do
+        if r.target == "0.0.0.0" and r.mask == 0 then return true end
     end
-    local cmd = string.format("ping -c 4 -W 2 -I %s %s >/dev/null 2>&1", ifname, LOGIN_SERVER)
-    return os.execute(cmd) == 0
+    return false
+end
+
+-- ifup 后轮询等就绪, 而不是固定睡几秒就宣告"无法获取IP地址".
+local function wait_for_link(conn, ifname, timeout)
+    local deadline = os.time() + timeout
+    while os.time() < deadline do
+        if iface_link_ok(conn, ifname) then return true end
+        os.execute("sleep 2")
+    end
+    return false
 end
 
 local function check_network(ifname, timeout)
@@ -49,12 +75,21 @@ local function check_network(ifname, timeout)
     return os.execute(cmd) == 0
 end
 
--- 通过 chkstatus.uid 判断是否已认证 (校园网会放行 alibaba DNS 当 ping 白名单, 因此不能用 ping 判定)
-local function is_authenticated(conn, ifname)
-    if not ifname then return false end
+-- 通过 chkstatus 判断门户状态 (校园网会放行 alibaba DNS 当 ping 白名单, 因此不能用 ping 判定).
+-- 1.0.9: 由 bool 改三态. 关键在于"门户说你没登录"和"门户根本连不上"是两回事:
+--   online       已认证, 无需动作
+--   offline      门户可达且明确无 uid -> 真的没登录, 该认证
+--   unreachable  chkstatus 拿不到任何内容 -> 只说明这一刻不通, 不能断定未认证
+-- 1.0.8 及之前把 unreachable 当成 offline, 于是一次抖动就触发 ifup 释放正常租约.
+local function portal_state(conn, ifname)
+    if not ifname then return "unreachable" end
     local ok, status = pcall(conn.call, conn, "cquauth", "get_status", { interface = ifname })
-    if not ok or not status then return false end
-    return status.uid ~= nil and status.uid ~= "" and status.uid ~= "N/A"
+    if not ok or type(status) ~= "table" then return "unreachable" end
+    -- reachable 由 rpcd 后端给出 (chkstatus payload 是否为空).
+    -- 老后端没有该字段(nil), 此时退回旧语义: 有 uid 即在线, 否则视为未认证.
+    if status.reachable == false then return "unreachable" end
+    if status.uid ~= nil and status.uid ~= "" and status.uid ~= "N/A" then return "online" end
+    return "offline"
 end
 
 local function auth_account(conn, config)
@@ -145,26 +180,69 @@ while true do
                 if not auth_retry_state[config.interface] then
                     auth_retry_state[config.interface] = 0
                 end
-                if not is_authenticated(conn, config.interface) then
-                    log_ifname(config.interface, "未认证: 开始认证")
-                    if not check_authserver(config.interface) then
-                        log_ifname(config.interface, "无法连接认证服务器, 尝试 ifup")
-                        os.execute("ifup " .. config.interface)
+                -- 1.0.9: 按门户三态分流. 只有确定"没登录"或"链路真的断了"才动手,
+                -- 门户单纯连不上时保持不动 —— 那多半只是上游抖动, 一分钟内会自己好.
+                local iface = config.interface
+                local state = portal_state(conn, iface)
+                local should_auth = false
+
+                if state == "online" then
+                    unreach_rounds[iface] = 0
+                    if ENABLE_ECMP == 1 then
+                        table.insert(ecmp_ifaces, iface)
+                        -- remove_value(wan_ifaces, iface)
                     end
-                    local success = auth_account(conn, config)
-                    if success then
-                        auth_retry_state[config.interface] = 0
+                elseif state == "offline" then
+                    unreach_rounds[iface] = 0
+                    log_ifname(iface, "未认证: 开始认证")
+                    should_auth = true
+                else -- unreachable
+                    unreach_rounds[iface] = (unreach_rounds[iface] or 0) + 1
+                    if iface_link_ok(conn, iface) then
+                        -- 链路有 IP 有默认路由 -> 绝不能 ifup, 否则会 release 掉正常租约.
+                        -- 兜底: 万一某天门户在未登录时也返回空 payload, 这里仍会周期性盲试认证,
+                        -- 避免"永远不认证"的死局; 盲试只发登录请求, 不碰网络配置.
+                        if unreach_rounds[iface] % UNREACH_AUTH_AFTER == 0 then
+                            log_ifname(iface, string.format(
+                                "门户已连续 %d 轮不可达但链路正常, 盲试一次认证", unreach_rounds[iface]))
+                            should_auth = true
+                        else
+                            log_ifname(iface, "门户暂不可达但链路正常, 判为网络抖动, 跳过本轮")
+                        end
                     else
-                        auth_retry_state[config.interface] = auth_retry_state[config.interface] + 1
-                        if MAX_ATTEMPTS > 0 and auth_retry_state[config.interface] >= MAX_ATTEMPTS then
-                            log_ifname(config.interface, "认证失败次数达到上限，禁用账户")
+                        local now = os.time()
+                        local last = last_ifup_at[iface] or 0
+                        if now - last >= IFUP_MIN_INTERVAL then
+                            log_ifname(iface, "链路异常(无 IP 或无默认路由), 执行 ifup")
+                            last_ifup_at[iface] = now
+                            os.execute("ifup " .. iface)
+                            if wait_for_link(conn, iface, IFUP_WAIT) then
+                                log_ifname(iface, "接口已就绪, 继续认证")
+                                should_auth = true
+                            else
+                                log_ifname(iface, string.format(
+                                    "ifup 后 %d 秒内接口仍未就绪, 本轮放弃", IFUP_WAIT))
+                            end
+                        else
+                            log_ifname(iface, string.format(
+                                "链路异常但距上次 ifup 仅 %d 秒, 等 DHCP 自行完成", now - last))
+                        end
+                    end
+                end
+
+                if should_auth then
+                    local auth_ok = auth_account(conn, config)
+                    if auth_ok then
+                        auth_retry_state[iface] = 0
+                        unreach_rounds[iface] = 0
+                    else
+                        auth_retry_state[iface] = auth_retry_state[iface] + 1
+                        if MAX_ATTEMPTS > 0 and auth_retry_state[iface] >= MAX_ATTEMPTS then
+                            log_ifname(iface, "认证失败次数达到上限，禁用账户")
                             ctx:set("cquauth", s['.name'], "enabled", "0")
                             ctx:commit("cquauth")
                         end
                     end
-                elseif ENABLE_ECMP == 1 then
-                    table.insert(ecmp_ifaces, config.interface)
-                    -- remove_value(wan_ifaces, config.interface)
                 end
             end
         end)
