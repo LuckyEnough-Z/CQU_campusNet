@@ -1,0 +1,21 @@
+main:
+  workers: 1
+
+socks5:
+  port: 1080
+  address: 127.0.0.1
+  udp: 'udp'
+  mark: 0x438
+
+tcp:
+  port: 1088
+  address: '0.0.0.0'
+
+udp:
+  port: 1088
+  address: '0.0.0.0'
+
+dns:
+  port: 1053
+  address: '::'
+  upstream: 127.0.0.1

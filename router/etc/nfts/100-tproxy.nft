@@ -1,0 +1,10 @@
+#!/usr/sbin/nft -f
+
+table inet tproxy_table {
+    chain prerouting {
+        type filter hook prerouting priority -100; policy accept;
+        # 仅劫持 LAN->外网 明文 HTTP(80) 进 hev->ua3f 做 UA 改写+L4 归一;
+        # 其余 TCP(含443) 与全部 UDP 直连, 避免非HTTP流量打爆 ua3f HTTP 解析(hev [E] 噪声)
+        iifname "br-lan" ip daddr != 192.168.1.0/24 tcp dport 80 tproxy ip to 127.0.0.1:1088 mark set 1
+    }
+}

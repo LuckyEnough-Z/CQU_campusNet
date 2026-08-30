@@ -22,3 +22,6 @@ Thumbs.db
 # creates a file named "nul" in the cwd when invoking ssh through wsl)
 nul
 **/nul
+
+# 第三方转载资料 (CC BY-NC-SA, 与本仓库 Apache-2.0 不同许可), 只在本地留存
+ref/

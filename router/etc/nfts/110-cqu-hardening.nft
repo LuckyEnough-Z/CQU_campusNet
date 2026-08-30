@@ -1,0 +1,17 @@
+#!/usr/sbin/nft -f
+
+table inet cqu_hardening {
+    chain cqu_post {
+        type filter hook postrouting priority mangle; policy accept;
+        oifname "wan" ip ttl set 64
+    }
+    chain cqu_forward {
+        type filter hook forward priority -10; policy accept;
+        iifname "br-lan" oifname "wan" udp dport 443 reject
+        iifname "br-lan" meta nfproto ipv6 counter drop
+    }
+    chain cqu_nat {
+        type nat hook prerouting priority dstnat; policy accept;
+        iifname "br-lan" udp dport 123 redirect to :123
+    }
+}

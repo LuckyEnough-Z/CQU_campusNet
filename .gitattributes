@@ -1,0 +1,6 @@
+# router/ 下的文件是直接 scp 到 OpenWrt 上跑的 shell / init / nft 脚本;
+# tests/ 与根目录的 *.sh 同样要传到路由器或 Linux 客户端执行。
+# Windows 检出若变成 CRLF, busybox ash 会因 "EOF\r" 之类报语法错误。
+# 强制工作区保持 LF, 免得传上去再现 dos2unix。
+router/** text eol=lf
+*.sh      text eol=lf
