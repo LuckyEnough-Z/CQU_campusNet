@@ -23,5 +23,10 @@ Thumbs.db
 nul
 **/nul
 
-# 第三方转载资料 (CC BY-NC-SA, 与本仓库 Apache-2.0 不同许可), 只在本地留存
+# 只在本地留存, 不入版本库:
+#   ref/    第三方转载资料 (CC BY-NC-SA, 与本仓库 Apache-2.0 不同许可)
+#   router/ 路由器上的运维脚本 (netwatch / tproxy_service / ua3f / nfts / hevproxy)
+#   tests/  防检测泄露面体检脚本
 ref/
+router/
+tests/
