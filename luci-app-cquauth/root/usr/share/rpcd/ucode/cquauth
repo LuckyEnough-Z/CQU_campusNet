@@ -133,13 +133,18 @@ const methods = {
     },
     // 未登录时 chkstatus 不会返回 uid; 任一字段为 N/A 即视为未登录
     get_status: {
-        args: { interface: 'string' },
+        // 1.1.1: quiet=true 时不写日志. 页面每 5 秒轮询一次, 不静默会把 logread 环形缓冲刷满,
+        // 挤掉守护进程真正有用的日志; 守护进程自己调用时不传 quiet, 日志照常.
+        args: { interface: 'string', quiet: true },
         call: function(req) {
             const iface = req.args?.interface ?? 'eth0';
+            const quiet = req.args?.quiet == true;
             const info = fetch_chkstatus(iface);
-            log_ifname(iface, `chkstatus payload length: ${length(info.payload)}`);
-            if (length(info.payload) == 0) {
-                log_ifname(iface, `Please check your connection to ${LOGIN_HOST}`);
+            if (!quiet) {
+                log_ifname(iface, `chkstatus payload length: ${length(info.payload)}`);
+                if (length(info.payload) == 0) {
+                    log_ifname(iface, `Please check your connection to ${LOGIN_HOST}`);
+                }
             }
             const status = {
                 time: info.time ?? 'N/A',
@@ -151,7 +156,9 @@ const methods = {
                 reachable: length(info.payload) > 0
             };
 
-            log_ifname(iface, `Current status: time=${status.time}, flow=${status.flow}, uid=${status.uid}, v4ip=${status.v4ip}`);
+            if (!quiet) {
+                log_ifname(iface, `Current status: time=${status.time}, flow=${status.flow}, uid=${status.uid}, v4ip=${status.v4ip}`);
+            }
             return status;
         }
     },

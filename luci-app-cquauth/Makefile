@@ -5,13 +5,18 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-cquauth
-PKG_VERSION:=1.1.0
+PKG_VERSION:=1.1.1
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=lurenjiamax <lurenjiamax@gmail.com>
 
 LUCI_TITLE:=CQU Auth (Chongqing University Authentication)
 LUCI_PKGARCH:=all
+# 1.1.1: 修页面状态表重复行 + 页面轮询刷日志.
+#        页面: 状态表只列启用的账号, 同一接口只一行(门户状态按接口查, 多账号同接口原先会
+#              生成内容相同的重复行, 并成倍查询门户).
+#        ucode: get_status 加 quiet 参数, 页面轮询传 quiet 不写日志(原先开着页面每 5 秒
+#               写 2 行/账号, 挤掉 logread 环形缓冲里守护进程的有用日志); 守护进程不传, 照常记录.
 # 1.1.0: 页面功能增强 + 后端新增 running/get_logs/logout.
 #        ucode: +running(pgrep 查守护进程是否存活) +get_logs(页面看 logread) +logout
 #               (解绑终端MAC, 失败回退老式 logout, 参考 cqu-net-auth); +ip_to_int 辅助.

@@ -11,7 +11,7 @@
 var callGetStatus = rpc.declare({
     object: 'cquauth',
     method: 'get_status',
-    params: ['interface'],
+    params: ['interface', 'quiet'],
 });
 
 var callRunning = rpc.declare({
@@ -69,10 +69,14 @@ function fmtBytes(n) {
     return (i === 0 ? n : n.toFixed(2)) + ' ' + u[i];
 }
 
+// 1.1.1: 只取启用的账号, 且同一接口只取第一个. 门户状态是按接口(出口 IP)查的,
+// 同一接口配多个账号时逐个建行只会得到内容完全相同的重复行, 还会成倍地查询门户.
 function accountsFromUci() {
     var list = [];
+    var seen = {};
     uci.sections('cquauth', 'account', function(s) {
-        if (s.interface) {
+        if (s.interface && s.enabled === '1' && !seen[s.interface]) {
+            seen[s.interface] = true;
             list.push({
                 sid: s['.name'],
                 user: s.user,
@@ -177,7 +181,7 @@ function updateStatus(table, accounts) {
             ]);
             table.appendChild(row);
         }
-        callGetStatus(acc.interface).then(function(result) {
+        callGetStatus(acc.interface, true).then(function(result) {
             var authed = result && result.uid && result.uid !== 'N/A';
             row.cells[1].textContent = (result && result.uid) ? result.uid : 'N/A';
             if (result && result.reachable === false) {
@@ -247,7 +251,8 @@ return view.extend({
 
             var accounts = accountsFromUci();
             if (accounts.length === 0) {
-                container.appendChild(E('div', { 'class': 'alert-message warning' }, _('没有配置任何账号')));
+                updateDaemon(banner);
+                container.appendChild(E('div', { 'class': 'alert-message warning' }, _('没有启用的账号 (在下方"账号配置"里勾选启用)')));
             } else {
                 var table = createStatusTable();
                 container.appendChild(table);
