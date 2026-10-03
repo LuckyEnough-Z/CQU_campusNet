@@ -5,13 +5,17 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-cquauth
-PKG_VERSION:=1.0.9
+PKG_VERSION:=1.0.10
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=lurenjiamax <lurenjiamax@gmail.com>
 
 LUCI_TITLE:=CQU Auth (Chongqing University Authentication)
 LUCI_PKGARCH:=all
+# 1.0.10: 补齐守护进程的运行时依赖 +luci-compat +libubus-lua.
+#        /usr/bin/cquauth_client 是 #!/usr/bin/lua, 且 require "luci.model.uci" 与 "ubus";
+#        OpenWrt 24.10.x 默认镜像连 lua 都不带, 之前漏声明导致在默认固件上装完守护进程
+#        直接 crash loop (procd 重试 11 次后放弃), 只在恰好手动装过 luci-compat 的机器上能跑.
 # 1.0.9: 修复"自救反而弄断网"的 bug: 一次瞬时 chkstatus 空响应会导致 ifup 释放正常
 #        的 DHCP 租约, 每 60s 重复一次打断进行中的 DHCP, 实测造成 20 分钟断网.
 #        lua: is_authenticated(bool) -> portal_state(三态 online/offline/unreachable);
@@ -28,7 +32,7 @@ LUCI_PKGARCH:=all
 #        修复改账号/切 phone-pc 需要手动 restart cquauth_client 的 bug.
 # 1.0.6: 改用 uclient-fetch (OpenWrt 基础组件, 不怕固件 curl/libcurl 版本不匹配),
 #        并补上 get_gw 真正依赖的 jq (1.0.5 漏声明导致部分固件 jq 缺失).
-LUCI_DEPENDS:=+jq +uclient-fetch
+LUCI_DEPENDS:=+jq +uclient-fetch +luci-compat +libubus-lua
 
 include $(TOPDIR)/feeds/luci/luci.mk
 

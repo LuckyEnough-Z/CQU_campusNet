@@ -81,6 +81,13 @@ actually work on a stock ImmortalWrt install.
 - The `mv /tmp/cquauth.bak /etc/config/cquauth` restore step now guards on
   `-f /tmp/cquauth.bak` so a fresh install no longer prints `mv: can't rename
   '/tmp/cquauth.bak': No such file or directory`.
+- The daemon (`/usr/bin/cquauth_client`) is a Lua script that `require`s
+  `luci.model.uci` and `ubus`. Up to 1.0.9 the package declared only `+jq
+  +uclient-fetch`, so on a stock OpenWrt 24.10.x image (which ships no Lua
+  interpreter at all) the daemon crash-looped right after install and procd
+  gave up after 11 restarts; the status RPC kept working, which masked the
+  failure until the portal session expired. 1.0.10 adds `+luci-compat
+  +libubus-lua` to `LUCI_DEPENDS`.
 
 ### Sharing-detection diagnostic (`root/usr/share/cquauth/diag-sharing.sh`)
 
@@ -169,8 +176,10 @@ campus IP).
 
 Building from source against the matching ImmortalWrt SDK works as a normal
 LuCI package (drop this directory under the SDK's `package/`, run
-`make package/luci-app-cquauth/compile V=s`). The package only depends on
-`curl`; `lua` and `ucode` are part of every stock LuCI install.
+`make package/luci-app-cquauth/compile V=s`). Runtime dependencies are
+`jq`, `uclient-fetch`, `luci-compat` and `libubus-lua` (declared in `LUCI_DEPENDS`,
+so `opkg` pulls them in). `ucode` ships with every stock LuCI install; `lua`
+does **not** on OpenWrt 24.10.x and comes in via `luci-compat`.
 
 ## Acknowledgements
 
