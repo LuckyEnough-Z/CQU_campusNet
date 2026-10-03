@@ -59,6 +59,24 @@ function url_encode(str) {
     return res;
 }
 
+// IP 点分十进制 -> 大端整数, 注销(unbind)接口要求 wlan_user_ip 用整数形式.
+// 与 cqu-net-auth 的 int.from_bytes(inet_aton(ip),'big') 一致.
+function ip_to_int(ip) {
+    const parts = split(ip ?? '', '.');
+    if (length(parts) != 4) {
+        return null;
+    }
+    let v = 0;
+    for (let i = 0; i < 4; i++) {
+        const o = +parts[i];
+        if (type(o) != 'int' || o < 0 || o > 255) {
+            return null;
+        }
+        v = v * 256 + o;
+    }
+    return v;
+}
+
 function get_gw(ifname) {
     if (!ifname) {
         return 'N/A';
@@ -156,6 +174,60 @@ const methods = {
             }
             log_ifname(iface, `手动诊断快照: ${path}`);
             return { success: true, path: path };
+        }
+    },
+    // 守护进程是否在运行. 页面状态表只反映门户(经 rpcd 查 chkstatus), 跟守护进程是否存活无关;
+    // 守护进程崩了页面照样显示"在线", 所以单独给个真·进程状态.
+    running: {
+        call: function() {
+            const pid = trim(safe_exec("pgrep -f '/usr/bin/cquauth_client' 2>/dev/null"));
+            return { running: pid != '', pid: pid };
+        }
+    },
+    // 返回最近的 cquauth 日志给页面看, 省去 SSH logread. 账号密码不进日志(登录 URL 只截 substr).
+    get_logs: {
+        args: { lines: 0 },
+        call: function(req) {
+            let n = req.args?.lines ?? 60;
+            if (type(n) != 'int' || n <= 0) n = 60;
+            if (n > 200) n = 200;
+            const out = safe_exec(sprintf('logread -e cquauth_client 2>/dev/null | tail -n %d', n));
+            return { log: out };
+        }
+    },
+    // 注销(下线)当前认证账户: 先解绑终端 MAC, 失败回退老式 logout. 参考 cqu-net-auth/logout.py.
+    // 注意: 若 basic.enabled=1 且该账号 enabled=1, 守护进程会在下个轮询周期(check_interval)重新认证.
+    logout: {
+        args: { interface: 'string' },
+        call: function(req) {
+            const iface = req.args?.interface ?? 'eth0';
+            const info = fetch_chkstatus(iface);
+            if (!info.uid || info.uid == '') {
+                return { success: false, message: '当前未认证, 无需注销' };
+            }
+            const intip = ip_to_int(info.v46ip);
+            if (intip == null) {
+                return { success: false, message: '无法解析校园网IP' };
+            }
+            const unbind_url = sprintf(
+                'http://%s:801/eportal/portal/mac/unbind?callback=dr1002&user_account=%s&wlan_user_mac=000000000000&wlan_user_ip=%d&jsVersion=4.2.2&v=6024&lang=zh',
+                LOGIN_HOST, url_encode(info.uid), intip
+            );
+            const raw = safe_exec(sprintf('uclient-fetch -q -T 5 -O - "%s" 2>/dev/null', unbind_url));
+            const payload = match(raw, match_dr_payload)?.[1] ?? '';
+            const msg = match(payload, match_msg)?.[1] ?? '';
+            if (index(msg, '解绑终端MAC成功') != -1) {
+                log_ifname(iface, '注销成功(解绑终端MAC)');
+                return { success: true, message: '注销成功' };
+            }
+            // 回退: 老式 /eportal/portal/logout, 成功页面含 "Radius注销成功！"
+            const oldraw = safe_exec(sprintf('uclient-fetch -q -T 5 -O - "http://%s:801/eportal/portal/logout" 2>/dev/null', LOGIN_HOST));
+            if (index(oldraw, 'Radius注销成功') != -1) {
+                log_ifname(iface, '注销成功(Radius)');
+                return { success: true, message: '注销成功' };
+            }
+            log_ifname(iface, sprintf('注销失败: %s', msg || '未知'));
+            return { success: false, message: msg != '' ? msg : '注销失败' };
         }
     },
     enable_ecmp: {

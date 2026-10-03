@@ -5,13 +5,20 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-cquauth
-PKG_VERSION:=1.0.10
+PKG_VERSION:=1.1.0
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=lurenjiamax <lurenjiamax@gmail.com>
 
 LUCI_TITLE:=CQU Auth (Chongqing University Authentication)
 LUCI_PKGARCH:=all
+# 1.1.0: 页面功能增强 + 后端新增 running/get_logs/logout.
+#        ucode: +running(pgrep 查守护进程是否存活) +get_logs(页面看 logread) +logout
+#               (解绑终端MAC, 失败回退老式 logout, 参考 cqu-net-auth); +ip_to_int 辅助.
+#        页面: 新增守护进程存活指示(区别于门户状态)、每账号"立即认证/注销/诊断"按钮、
+#              最近日志面板; 在线时长按秒格式化, 流量标注"计费口径·非实时"(实测门户 flow
+#              非实时); 修正过时说明("保存后自动生效"), Ping目标/ECMP路由表仅在开 ECMP 时显示.
+#        acl: 放行 running/get_logs/logout.
 # 1.0.10: 补齐守护进程的运行时依赖 +luci-compat +libubus-lua.
 #        /usr/bin/cquauth_client 是 #!/usr/bin/lua, 且 require "luci.model.uci" 与 "ubus";
 #        OpenWrt 24.10.x 默认镜像连 lua 都不带, 之前漏声明导致在默认固件上装完守护进程

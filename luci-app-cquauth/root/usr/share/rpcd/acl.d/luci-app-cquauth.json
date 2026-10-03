@@ -3,13 +3,13 @@
         "description": "CQU Auth Client access",
         "read": {
             "ubus": {
-                "cquauth": ["get_status", "login", "diagnose"]
+                "cquauth": ["get_status", "running", "get_logs", "login", "diagnose", "logout", "service"]
             },
             "uci": ["cquauth"]
         },
         "write": {
             "ubus": {
-                "cquauth": ["login", "diagnose"]
+                "cquauth": ["login", "diagnose", "logout", "service"]
             },
             "uci": ["cquauth"]
         }

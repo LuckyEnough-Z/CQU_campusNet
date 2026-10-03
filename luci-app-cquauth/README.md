@@ -147,18 +147,34 @@ Remediation paths the report does not pick between for you:
 - accept the leak (the threshold for sharing-detection is volume-based;
   one-off requests usually don't trip it).
 
-### Notes on the unchanged surface
+### UI and RPC additions (1.1.0)
 
-The UI (`htdocs/luci-static/resources/view/cquauth/*.js`), the ACL
-(`root/usr/share/rpcd/acl.d/luci-app-cquauth.json` — extended only to grant
-the new `diagnose` method), the menu entry, the ECMP routing logic and the
-multi-account / multi-interface configuration model are all preserved as-is
-from upstream. If you've configured the upstream version before, the same
-`/etc/config/cquauth` keeps working.
+The menu entry, the ECMP routing logic and the multi-account / multi-interface
+configuration model are preserved from upstream — the same `/etc/config/cquauth`
+keeps working. The status/config page was reworked, and three RPC methods were
+added (reflected in the ACL):
 
-A logout RPC method is not implemented yet, even though `cqu-net-auth` ships one
-against `/eportal/portal/mac/unbind`. The upstream UI never called it, so this
-fork doesn't either.
+- **`running`** — reports whether the `/usr/bin/cquauth_client` daemon process is
+  actually alive (`pgrep`). This is distinct from the portal status the table
+  already shows: the table queries `chkstatus` through rpcd, so it keeps showing
+  "online" even when the daemon has crashed. The page now surfaces both.
+- **`get_logs`** — returns the recent `logread -e cquauth_client` tail so the
+  page can show logs without SSH. Credentials never reach the log (the login URL
+  is only ever logged as a `substr` that stops before the query string).
+- **`logout`** — unbinds the terminal MAC via
+  `http://login.cqu.edu.cn:801/eportal/portal/mac/unbind` (IP passed as a
+  big-endian integer, matching `cqu-net-auth`'s `logout.py`), falling back to the
+  legacy `/eportal/portal/logout`. Note that if the service and the account are
+  both enabled, the daemon will re-authenticate on its next poll, so a manual
+  logout only "sticks" if you also disable the service or the account.
+
+The page adds a daemon-alive banner, per-account **立即认证 / 注销 / 诊断**
+buttons, and a recent-log panel; it formats the online time (the portal `time`
+field is seconds) and labels the traffic column as billing-side / non-realtime
+(the portal `flow` field does not track live throughput — a 15 MB download over
+60 s left it unchanged in testing). The "restart service manually" hint was
+dropped (config has auto-reloaded since 1.0.7), and the Ping target / ECMP table
+options now only show when ECMP is enabled.
 
 ## Installing
 
