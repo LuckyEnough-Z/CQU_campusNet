@@ -86,11 +86,17 @@ function get_gw(ifname) {
 }
 
 // 调用 login.cqu.edu.cn/drcom/chkstatus, 解析 JSONP 内容
-function fetch_chkstatus(iface) {
+// 1.1.2: 最近一次 chkstatus 结果缓存 (rpcd 加载脚本后模块级变量常驻, 跨调用保留).
+// 页面轮询优先用缓存; rpcd 串行处理 ucode 调用, 门户连不上时每次现查都要等到超时,
+// 期间 LuCI 其他请求全部排队, 页面就会卡.
+let chk_cache = {};   // [iface] = { info, ts }, 按接口分开, 多 WAN 时不串
+const PAGE_CACHE_SECS = 8;
+
+function fetch_chkstatus(iface, tmo) {
     const url = sprintf('http://%s/drcom/chkstatus?callback=dr1002&jsVersion=4.X&v=5505&lang=zh', LOGIN_HOST);
     // 用 uclient-fetch 而非 curl: 部分固件 curl 与 libcurl 版本不匹配会 symbol-not-found,
     // uclient-fetch 是 OpenWrt 基础组件, 更可靠且无依赖. 单 WAN 下无需 --interface.
-    const cmd = sprintf('uclient-fetch -q -T 5 -O - "%s" 2>/dev/null', url);
+    const cmd = sprintf('uclient-fetch -q -T %d -O - "%s" 2>/dev/null', tmo ?? 5, url);
     const raw = safe_exec(cmd);
     const payload = match(raw, match_dr_payload)?.[1] ?? '';
     return {
@@ -133,13 +139,24 @@ const methods = {
     },
     // 未登录时 chkstatus 不会返回 uid; 任一字段为 N/A 即视为未登录
     get_status: {
-        // 1.1.1: quiet=true 时不写日志. 页面每 5 秒轮询一次, 不静默会把 logread 环形缓冲刷满,
-        // 挤掉守护进程真正有用的日志; 守护进程自己调用时不传 quiet, 日志照常.
-        args: { interface: 'string', quiet: true },
+        // 1.1.1: quiet=true 时不写日志 (页面轮询用, 免得刷满 logread 环形缓冲).
+        // 1.1.2: fresh=true 时一定现查门户、超时 5s 并刷新缓存 (守护进程用, 认证判断要最新状态);
+        //        quiet 但不 fresh (页面) 时, 缓存不超过 PAGE_CACHE_SECS 秒就直接返回缓存,
+        //        否则现查但超时只给 2s, 门户连不上时页面最多卡 2s 而不是 5s.
+        //        都不传 (老调用方/手动 ubus) 保持原行为: 现查 5s 并写日志.
+        args: { interface: 'string', quiet: true, fresh: true },
         call: function(req) {
             const iface = req.args?.interface ?? 'eth0';
             const quiet = req.args?.quiet == true;
-            const info = fetch_chkstatus(iface);
+            const fresh = req.args?.fresh == true || !quiet;
+            let info;
+            const c = chk_cache[iface];
+            if (!fresh && c != null && time() - c.ts < PAGE_CACHE_SECS) {
+                info = c.info;
+            } else {
+                info = fetch_chkstatus(iface, fresh ? 5 : 2);
+                chk_cache[iface] = { info: info, ts: time() };
+            }
             if (!quiet) {
                 log_ifname(iface, `chkstatus payload length: ${length(info.payload)}`);
                 if (length(info.payload) == 0) {

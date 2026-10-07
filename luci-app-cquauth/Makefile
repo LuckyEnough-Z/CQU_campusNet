@@ -5,13 +5,21 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-cquauth
-PKG_VERSION:=1.1.1
+PKG_VERSION:=1.1.2
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=lurenjiamax <lurenjiamax@gmail.com>
 
 LUCI_TITLE:=CQU Auth (Chongqing University Authentication)
 LUCI_PKGARCH:=all
+# 1.1.2: 日志瘦身 + 门户不可达时页面不卡.
+#        lua: 查门户带 quiet+fresh, 不再每轮写状态日志与 "Sleeping.."; 改为状态变化时记一行
+#             (启动/在线/未认证/门户不可达 之间切换) + 每小时一行心跳. 原先每分钟 3 行,
+#             logread 环形缓冲只能保留约 4 小时, 出事后回头查往往已被覆盖.
+#        ucode: chkstatus 结果按接口缓存; 页面查询(quiet 不 fresh) 8 秒内用缓存, 否则现查且
+#               超时 2s; 守护进程(fresh) 照旧现查 5s. rpcd 串行处理调用, 门户连不上时原先
+#               每次都等满 5s, 期间 LuCI 其他请求全部排队.
+#        页面: 轮询 5s -> 10s.
 # 1.1.1: 修页面状态表重复行 + 页面轮询刷日志.
 #        页面: 状态表只列启用的账号, 同一接口只一行(门户状态按接口查, 多账号同接口原先会
 #              生成内容相同的重复行, 并成倍查询门户).

@@ -81,15 +81,45 @@ end
 --   offline      门户可达且明确无 uid -> 真的没登录, 该认证
 --   unreachable  chkstatus 拿不到任何内容 -> 只说明这一刻不通, 不能断定未认证
 -- 1.0.8 及之前把 unreachable 当成 offline, 于是一次抖动就触发 ifup 释放正常租约.
+-- 1.1.2: 返回 (state, status). 查询带 quiet+fresh: 不让后端每轮写两行状态日志
+-- (原先每分钟 3 行心跳把 logread 环形缓冲刷到只剩约 4 小时), 但仍现查门户拿最新状态.
+-- 日志改由主循环在状态变化时、以及每小时心跳时记录.
 local function portal_state(conn, ifname)
-    if not ifname then return "unreachable" end
-    local ok, status = pcall(conn.call, conn, "cquauth", "get_status", { interface = ifname })
-    if not ok or type(status) ~= "table" then return "unreachable" end
+    if not ifname then return "unreachable", nil end
+    local ok, status = pcall(conn.call, conn, "cquauth", "get_status",
+        { interface = ifname, quiet = true, fresh = true })
+    if not ok or type(status) ~= "table" then return "unreachable", nil end
     -- reachable 由 rpcd 后端给出 (chkstatus payload 是否为空).
     -- 老后端没有该字段(nil), 此时退回旧语义: 有 uid 即在线, 否则视为未认证.
-    if status.reachable == false then return "unreachable" end
-    if status.uid ~= nil and status.uid ~= "" and status.uid ~= "N/A" then return "online" end
-    return "offline"
+    if status.reachable == false then return "unreachable", status end
+    if status.uid ~= nil and status.uid ~= "" and status.uid ~= "N/A" then return "online", status end
+    return "offline", status
+end
+
+local STATE_NAME = { online = "在线", offline = "未认证", unreachable = "门户不可达" }
+local HEARTBEAT_INTERVAL = 3600   -- 状态不变时, 每这么多秒记一行心跳, 证明守护进程还活着
+local last_state = {}             -- [iface] = 上一轮的门户状态
+local last_heartbeat = {}         -- [iface] = 上次心跳时间
+
+local function status_brief(st)
+    if type(st) ~= "table" then return "" end
+    return string.format("uid=%s, IP=%s, time=%s, flow=%s",
+        st.uid or "N/A", st.v4ip or "N/A", st.time or "N/A", st.flow or "N/A")
+end
+
+-- 状态变化时记一行; 状态不变时每小时记一次心跳.
+local function log_state(iface, state, st)
+    local now = os.time()
+    local prev = last_state[iface]
+    if prev ~= state then
+        log_ifname(iface, string.format("门户状态: %s -> %s %s",
+            prev and STATE_NAME[prev] or "启动", STATE_NAME[state] or state, status_brief(st)))
+        last_state[iface] = state
+        last_heartbeat[iface] = now
+    elseif now - (last_heartbeat[iface] or 0) >= HEARTBEAT_INTERVAL then
+        log_ifname(iface, string.format("心跳: %s %s", STATE_NAME[state] or state, status_brief(st)))
+        last_heartbeat[iface] = now
+    end
 end
 
 local function auth_account(conn, config)
@@ -183,7 +213,8 @@ while true do
                 -- 1.0.9: 按门户三态分流. 只有确定"没登录"或"链路真的断了"才动手,
                 -- 门户单纯连不上时保持不动 —— 那多半只是上游抖动, 一分钟内会自己好.
                 local iface = config.interface
-                local state = portal_state(conn, iface)
+                local state, st = portal_state(conn, iface)
+                log_state(iface, state, st)
                 local should_auth = false
 
                 if state == "online" then
@@ -251,7 +282,7 @@ while true do
         end
         conn:close()
     end)
-    log("Sleeping..")
+    -- 1.1.2: 去掉每轮的 "Sleeping.." (纯噪音, 存活由每小时心跳证明)
     if not success then
         log("程序错误: " .. err)
     end

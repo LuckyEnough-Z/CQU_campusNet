@@ -267,7 +267,7 @@ return view.extend({
                         var b = document.getElementById('cquauth-daemon');
                         if (t) updateStatus(t, accountsFromUci());
                         if (b) updateDaemon(b);
-                    }, 5);
+                    }, 10);
                     pollAdded = true;
                 }
             }

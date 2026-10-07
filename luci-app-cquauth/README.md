@@ -176,6 +176,15 @@ field is seconds) and labels the traffic column as billing-side / non-realtime
 dropped (config has auto-reloaded since 1.0.7), and the Ping target / ECMP table
 options now only show when ECMP is enabled.
 
+Since 1.1.2 the daemon logs only on portal-state transitions (start / online /
+not authenticated / portal unreachable) plus one heartbeat line per hour, instead
+of three lines every poll; that stretches the `logread` ring buffer from roughly
+four hours of history to several days. The page reads status through a short
+per-interface cache (8 s) and, on a cache miss, gives the portal only 2 s instead
+of 5 s: rpcd serves ucode calls one at a time, so a slow or unreachable portal
+used to stall every other LuCI request behind the page's poll. The daemon still
+queries the portal fresh with the full 5 s timeout.
+
 ## Installing
 
 Pre-built `.ipk` (per release) goes onto the router via:
