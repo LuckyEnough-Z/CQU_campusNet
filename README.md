@@ -294,34 +294,16 @@ service tproxy_service restart
 # IPv6 如需恢复，按需 uci 还原 dhcp.lan/network.wan6 并去掉 sysctl 行
 ```
 
-## 替代部署：旁路由 + OpenClash
-
-若不想把 OpenWrt 作为主路由，可作为**旁路由**（如 `lan` 设为 `192.168.1.2`、网关指向
-主路由 `192.168.1.1`、DNS 指主路由 + `223.5.5.5`），用 **OpenClash（Redir-Host 模式）**
-替代 hev-socks5-tproxy，后端仍接 ua3f。其设置与上面 P0–P3 原理一一对应：
-
-| OpenClash 设置 | 对应本文加固 |
-| --- | --- |
-| 流量控制：禁用"仅允许常用端口流量" | **P1**（拦截全部端口而非白名单） |
-| 模式：关闭 UDP 流量转发 | **P3**（抑制 QUIC/UDP） |
-| 流量控制：本地 IPv4 绕过地址删除 `10.0.0.0` | 校园 `10.x` 必须走代理（本文 P1 规则也只排除 `192.168.1.0/24`） |
-| DNS：禁用本地 DNS 劫持 / 关闭重绑定保护 | 旁路由需对接主路由 DNS；主路由部署下由插件的 `rebind_domain` 处理 |
-| 开启旁路网关（旁路由）兼容 | 仅旁路由拓扑需要，主路由部署不涉及 |
-
-IPv6 关闭（P0）、固定 TTL（P2）、单一 UA 同样适用于该拓扑。具体步骤参考
-[UA3F/Clash 安装文档](https://sunbk201public.notion.site/UA3F-Clash-16d60a7b5f0e457a9ee97a3be7cbf557)
-（另有《OpenWrt 旁路由配置.pdf》本地部署备忘，未纳入仓库）。
-
 ## 参考链接
 
-- [luci-app-cquauth 认证插件](https://github.com/lurenjiamax/luci-app-cquauth)
+- [luci-app-cquauth 插件](https://github.com/lurenjiamax/luci-app-cquauth)
 - [UA3F](https://github.com/SunBK201/UA3F)
-- [UA3F 与 Clash 全教程](https://blog.sunbk201.site/posts/ua3f/)
+- [UA3F 与 Clash](https://blog.sunbk201.site/posts/ua3f/)
 - [hev-socks5-tproxy](https://github.com/heiher/hev-socks5-tproxy)
 - [使用 UA2F](https://blog.krytro.com/blogs/daily/240322.html)
 - [为什么路由器会被检测到](https://catalog.chn.moe/技术/OpenWrt/为啥我的路由器会被检测到/)
-- [cqu-net-auth Python 认证脚本](https://github.com/haowang02/cqu-net-auth)
-- [UA3F/Clash 安装文档（旁路由方案）](https://sunbk201public.notion.site/UA3F-Clash-16d60a7b5f0e457a9ee97a3be7cbf557)
+- [cqu-net-auth Python 认证](https://github.com/haowang02/cqu-net-auth)
+- [UA3F/Clash 文档（旁路由方案）](https://sunbk201public.notion.site/UA3F-Clash-16d60a7b5f0e457a9ee97a3be7cbf557)
 - [OpenClash 项目](https://github.com/vernesong/OpenClash)
 
 ## 致谢
