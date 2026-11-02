@@ -15,7 +15,7 @@
 ## 前提条件
 
 - OpenWrt 路由器（nftables ≥ 1.1.1）
-- 已安装校园网认证插件 [luci-app-cquauth](./luci-app-cquauth/)（本仓库内子目录, 适配 login.cqu.edu.cn 新认证端点的 fork）
+- 已安装校园网认证插件 [luci-app-cquauth](./luci-app-cquauth/)
 
 ## 部署步骤
 
@@ -34,7 +34,7 @@ opkg install curl libcurl luci-compat
 export url='https://blog.sunbk201.site/cdn' && sh -c "$(curl -kfsSl $url/install.sh)"
 ```
 
-> **注意**：如果 `hev-socks5-proxy` 在 opkg 源中找不到，手动下载对应架构的二进制文件并 scp 到路由器：
+> 如果 `hev-socks5-proxy` 在 opkg 源中找不到，手动下载对应架构的二进制文件并 scp 到路由器：
 > ```bash
 > scp hev-socks5-tproxy-linux-mips32elsf root@192.168.1.1:/usr/bin/hev-socks5-tproxy
 > ```
@@ -178,7 +178,7 @@ service tproxy_service enable
 service firewall restart
 ```
 
-## 多设备防检测加固（P0–P3，推荐）
+## 多设备防检测加固（P0–P3）
 
 > **原理**：ua3f 是 SOCKS5 *终结点*——凡是进入代理的流量都由路由器单一 TCP/IP 栈
 > 重新发起，L3/L4 指纹（TTL、IP-ID、TCP options/timestamps、端口行为）统一，并叠加
