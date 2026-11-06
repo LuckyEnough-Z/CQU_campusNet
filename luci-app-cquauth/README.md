@@ -159,8 +159,8 @@ added (reflected in the ACL):
   already shows: the table queries `chkstatus` through rpcd, so it keeps showing
   "online" even when the daemon has crashed. The page now surfaces both.
 - **`get_logs`** — returns the recent `logread -e cquauth_client` tail so the
-  page can show logs without SSH. Credentials never reach the log (the login URL
-  is only ever logged as a `substr` that stops before the query string).
+  page can show logs without SSH. Passwords never reach the log, and since 1.1.3
+  the account ID is masked to its first and last four characters.
 - **`logout`** — unbinds the terminal MAC via
   `http://login.cqu.edu.cn:801/eportal/portal/mac/unbind` (IP passed as a
   big-endian integer, matching `cqu-net-auth`'s `logout.py`), falling back to the
@@ -184,6 +184,25 @@ per-interface cache (8 s) and, on a cache miss, gives the portal only 2 s instea
 of 5 s: rpcd serves ucode calls one at a time, so a slow or unreachable portal
 used to stall every other LuCI request behind the page's poll. The daemon still
 queries the portal fresh with the full 5 s timeout.
+
+### Shell-injection fix (1.1.3)
+
+Up to 1.1.2 the rpcd backend built its log calls as
+`logger -t cquauth_client <message>` and handed that to the shell unquoted, and
+several messages embed raw text from the portal response. The portal is reached
+over plain HTTP, so anyone able to spoof that response (an on-path host on the
+campus network, ARP or DNS spoofing) could run commands on the router as root.
+The same applied to the portal-supplied `v46ip`, which went straight into the
+double-quoted login URL where `$(...)` still expands.
+
+1.1.3 single-quotes everything that goes into a shell command (log messages,
+`uclient-fetch` URLs, the diagnose script argument), accepts `v46ip` only if it
+is a valid dotted IPv4 address, whitelists the `service` action and validates the
+`enable_ecmp` interface, table and gateway values. It also drops the
+"Generated URL" log line: that `substr` actually covered `user_account` and
+`user_password`, and only stopped short of them because the unquoted `&` ended
+the shell command — with the quoting fixed it would have logged the password.
+Upgrading is recommended for everyone.
 
 ## Installing
 

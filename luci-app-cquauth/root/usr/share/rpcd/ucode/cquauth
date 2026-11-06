@@ -13,6 +13,11 @@ const match_uid       = /"uid"\s*:\s*"([^"]+)"/;
 const match_v46ip     = /"v46ip"\s*:\s*"([^"]+)"/;
 const match_time      = /"time"\s*:\s*"?([0-9]+)"?/;
 const match_flow      = /"flow"\s*:\s*"?([0-9]+)"?/;
+const match_ipv4      = /^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$/;
+const match_ifname    = /^[A-Za-z0-9_.@-]{1,32}$/;
+const match_rt_table  = /^[A-Za-z0-9_]{1,32}$/;
+
+const SERVICE_ACTIONS = { start: true, stop: true, restart: true, reload: true, enable: true, disable: true };
 
 function safe_exec(cmd) {
     return trim(popen(cmd)?.read?.('all') ?? '');
@@ -22,8 +27,25 @@ function exec(cmd) {
     return popen(cmd)?.read?.('all') ?? '';
 }
 
+// 1.1.3: 拼进 shell 命令的内容一律用它包成单引号字符串.
+// 之前 log() 把消息原样接在 logger 后面交给 shell, 门户返回的原文(明文 HTTP, 同网段可伪造)
+// 里的 ; & | $() 反引号都会被当成 shell 语法执行 —— 日志里 "Generated URL" 被 & 截断、
+// payload 的双引号被吃掉就是这个原因.
+function shq(s) {
+    return "'" + replace(`${s ?? ''}`, "'", "'\\''") + "'";
+}
+
 function log(msg) {
-    exec('logger -t cquauth_client ' + msg);
+    exec('logger -t cquauth_client ' + shq(msg));
+}
+
+// 1.1.3: 学号/账号进日志时打码, 只留首尾各 4 位.
+function mask_id(s) {
+    if (s == null || s == '' || s == 'N/A') {
+        return 'N/A';
+    }
+    const n = length(s);
+    return n > 8 ? substr(s, 0, 4) + '****' + substr(s, n - 4) : substr(s, 0, 2) + '****';
 }
 
 function log_ifname(ifname, msg) {
@@ -77,12 +99,19 @@ function ip_to_int(ip) {
     return v;
 }
 
+function valid_ipv4(s) {
+    return type(s) == 'string' && match(s, match_ipv4) != null && ip_to_int(s) != null;
+}
+
 function get_gw(ifname) {
-    if (!ifname) {
+    if (!ifname || match(ifname, match_ifname) == null) {
         return 'N/A';
     }
-    const cmd = sprintf('ip -j route show default | jq -r \'[.[] | select(.dev == %s)][0].gateway\'', ifname);
-    return exec(cmd);
+    // 1.1.3: 接口名经 jq --arg 传入. 原先直接拼进 jq 表达式, 既能注入, 也会因为没加引号
+    // (.dev == wan) 让 jq 报错返回空.
+    const cmd = sprintf('ip -j route show default | jq -r --arg d %s \'[.[] | select(.dev == $d)][0].gateway\'', shq(ifname));
+    const gw = safe_exec(cmd);
+    return valid_ipv4(gw) ? gw : 'N/A';
 }
 
 // 调用 login.cqu.edu.cn/drcom/chkstatus, 解析 JSONP 内容
@@ -96,13 +125,15 @@ function fetch_chkstatus(iface, tmo) {
     const url = sprintf('http://%s/drcom/chkstatus?callback=dr1002&jsVersion=4.X&v=5505&lang=zh', LOGIN_HOST);
     // 用 uclient-fetch 而非 curl: 部分固件 curl 与 libcurl 版本不匹配会 symbol-not-found,
     // uclient-fetch 是 OpenWrt 基础组件, 更可靠且无依赖. 单 WAN 下无需 --interface.
-    const cmd = sprintf('uclient-fetch -q -T %d -O - "%s" 2>/dev/null', tmo ?? 5, url);
+    const cmd = sprintf('uclient-fetch -q -T %d -O - %s 2>/dev/null', tmo ?? 5, shq(url));
     const raw = safe_exec(cmd);
     const payload = match(raw, match_dr_payload)?.[1] ?? '';
+    // 1.1.3: v46ip 会被拼进登录 URL 再交给 shell, 只接受合法的点分 IPv4.
+    const v46ip = match(payload, match_v46ip)?.[1];
     return {
         raw: raw,
         payload: payload,
-        v46ip: match(payload, match_v46ip)?.[1],
+        v46ip: valid_ipv4(v46ip) ? v46ip : null,
         uid:   match(payload, match_uid)?.[1],
         time:  match(payload, match_time)?.[1],
         flow:  match(payload, match_flow)?.[1],
@@ -120,7 +151,7 @@ function get_ip(ifname) {
 // 触发共享检测时, 调诊断脚本抓 conntrack/端口/DHCP 快照, 返回快照文件路径.
 // 详情见 /usr/share/cquauth/diag-sharing.sh
 function diagnose_sharing(ifname) {
-    const path = trim(safe_exec(sprintf('/usr/share/cquauth/diag-sharing.sh %s 2>/dev/null', ifname ?? 'unknown')));
+    const path = trim(safe_exec(sprintf('/usr/share/cquauth/diag-sharing.sh %s 2>/dev/null', shq(ifname ?? 'unknown'))));
     return path != '' ? path : null;
 }
 
@@ -134,6 +165,9 @@ const methods = {
         args: { action: 'string' },
         call: function(req) {
             const action = req.args?.action ?? 'restart';
+            if (!SERVICE_ACTIONS[action]) {
+                return { success: false, message: 'Invalid action' };
+            }
             return exec(`/etc/init.d/cquauth_client ${action}`);
         }
     },
@@ -174,7 +208,7 @@ const methods = {
             };
 
             if (!quiet) {
-                log_ifname(iface, `Current status: time=${status.time}, flow=${status.flow}, uid=${status.uid}, v4ip=${status.v4ip}`);
+                log_ifname(iface, `Current status: time=${status.time}, flow=${status.flow}, uid=${mask_id(status.uid)}, v4ip=${status.v4ip}`);
             }
             return status;
         }
@@ -204,7 +238,8 @@ const methods = {
     // 守护进程崩了页面照样显示"在线", 所以单独给个真·进程状态.
     running: {
         call: function() {
-            const pid = trim(safe_exec("pgrep -f '/usr/bin/cquauth_client' 2>/dev/null"));
+            // 1.1.3: pgrep -f 会连调用它的 sh -c 一起匹配上(命令行里也有这串路径), 多报一个 PID.
+            const pid = trim(safe_exec('pidof cquauth_client 2>/dev/null'));
             return { running: pid != '', pid: pid };
         }
     },
@@ -237,7 +272,7 @@ const methods = {
                 'http://%s:801/eportal/portal/mac/unbind?callback=dr1002&user_account=%s&wlan_user_mac=000000000000&wlan_user_ip=%d&jsVersion=4.2.2&v=6024&lang=zh',
                 LOGIN_HOST, url_encode(info.uid), intip
             );
-            const raw = safe_exec(sprintf('uclient-fetch -q -T 5 -O - "%s" 2>/dev/null', unbind_url));
+            const raw = safe_exec(sprintf('uclient-fetch -q -T 5 -O - %s 2>/dev/null', shq(unbind_url)));
             const payload = match(raw, match_dr_payload)?.[1] ?? '';
             const msg = match(payload, match_msg)?.[1] ?? '';
             if (index(msg, '解绑终端MAC成功') != -1) {
@@ -258,13 +293,28 @@ const methods = {
         args: { interfaces: [], table: "main" },
         call: function(req) {
             const ifaces = req.args?.interfaces ?? [];
-            if (length(ifaces) == 0) {
+            const table = req.args?.table ?? 'main';
+            // 1.1.3: 接口名、路由表名、网关都要校验后才能拼进 ip route 命令.
+            if (type(ifaces) != 'array' || length(ifaces) == 0 ||
+                length(filter(ifaces, i => type(i) != 'string' || match(i, match_ifname) == null)) > 0) {
                 log('Invalid interface name');
                 return { success: false, message: 'Invalid interface name' };
             }
-            const nexthop_str = "nexthop via %s dev %s weight 1";
-            const nexthop_strs = join(' ', map(ifaces, ifname => sprintf(nexthop_str, get_gw(ifname), ifname)));
-            const cmd = sprintf('ip route table %s replace default %s', req.args?.table ?? "main", nexthop_strs);
+            if (type(table) != 'string' || match(table, match_rt_table) == null) {
+                log('Invalid routing table');
+                return { success: false, message: 'Invalid routing table' };
+            }
+            const nexthops = [];
+            for (let ifname in ifaces) {
+                const gw = get_gw(ifname);
+                if (gw == 'N/A') {
+                    log(sprintf('Cannot resolve gateway for %s', ifname));
+                    return { success: false, message: 'Cannot resolve gateway' };
+                }
+                push(nexthops, sprintf('nexthop via %s dev %s weight 1', gw, ifname));
+            }
+            const nexthop_strs = join(' ', nexthops);
+            const cmd = sprintf('ip route table %s replace default %s', table, nexthop_strs);
             const result = exec(cmd);
             log(`Enable ecmp: ${result} ${cmd}`);
             return { success: result == '', message: 'Enable ecmp routing' };
@@ -289,7 +339,7 @@ const methods = {
             const term_type = (args.terminal_type == 'phone') ? '2'        : '1';
             const iface = args.interface ?? 'eth0';
 
-            log_ifname(iface, `logining, account: ${args.user}, terminal_type: ${args.terminal_type}`);
+            log_ifname(iface, `logining, account: ${mask_id(args.user)}, terminal_type: ${args.terminal_type}`);
             const ip = get_ip(iface);
             log_ifname(iface, `Resolved IP: ${ip ?? 'N/A'}`);
             if (ip == 'N/A') {
@@ -300,13 +350,15 @@ const methods = {
                 'http://%s:801/eportal/portal/login?callback=%s&login_method=1&user_account=%s%s&user_password=%s&wlan_user_ip=%s&wlan_user_ipv6=&wlan_user_mac=000000000000&wlan_ac_ip=&wlan_ac_name=&term_ua=%s&term_type=%s&jsVersion=4.2.2&terminal_type=%s&lang=zh-cn&v=1176&lang=zh-cn',
                 LOGIN_HOST, callback, prefix, url_encode(args.user), url_encode(args.pass), ip, url_encode(args.ua), term_type, term_type
             );
-            log_ifname(iface, `Generated URL: ${substr(url, 43, 150)}...`);
+            // 1.1.3: 不再记录登录 URL. 原先的 substr(url, 43, 150) 其实覆盖了 user_account 和
+            // user_password, 只是被 shell 当成后台符号的 & 截断才没写进日志; 引号修好后会原样泄露密码.
+            log_ifname(iface, `发送认证请求: callback=${callback}, term_type=${term_type}`);
 
             // uclient-fetch 不支持任意 --header/--interface; 认证逻辑全在 URL query
             // (term_ua 已 url_encode 在 URL 内), drcom eportal 不强校验 Referer/UA 头.
             const cmd = sprintf(
-                'uclient-fetch -q -T 5 -O - "%s" 2>/dev/null',
-                url
+                'uclient-fetch -q -T 5 -O - %s 2>/dev/null',
+                shq(url)
             );
             let success = false, message, ret;
             const raw = safe_exec(cmd);

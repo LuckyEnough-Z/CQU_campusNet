@@ -31,6 +31,14 @@ local function log_ifname(ifname, msg)
     log(string.format("[%s] %s", ifname, msg))
 end
 
+-- 1.1.3: 学号/账号进日志时打码, 只留首尾各 4 位 (与 rpcd 后端的 mask_id 一致).
+local function mask_id(s)
+    if s == nil or s == "" or s == "N/A" then return "N/A" end
+    s = tostring(s)
+    if #s > 8 then return s:sub(1, 4) .. "****" .. s:sub(-4) end
+    return s:sub(1, 2) .. "****"
+end
+
 -- TODO: skip ipv6 interfaces
 local function get_wan_zone_ifaces()
     local result = ctx:get("firewall", "zone_wan", "network")
@@ -104,7 +112,7 @@ local last_heartbeat = {}         -- [iface] = 上次心跳时间
 local function status_brief(st)
     if type(st) ~= "table" then return "" end
     return string.format("uid=%s, IP=%s, time=%s, flow=%s",
-        st.uid or "N/A", st.v4ip or "N/A", st.time or "N/A", st.flow or "N/A")
+        mask_id(st.uid), st.v4ip or "N/A", st.time or "N/A", st.flow or "N/A")
 end
 
 -- 状态变化时记一行; 状态不变时每小时记一次心跳.
@@ -132,15 +140,15 @@ local function auth_account(conn, config)
     })
 
     if result and result.success then
-        log_ifname(config.interface, string.format("认证成功: %s", config.user))
+        log_ifname(config.interface, string.format("认证成功: %s", mask_id(config.user)))
         local status = conn:call("cquauth", "get_status", { interface = config.interface })
         if status then
             log_ifname(config.interface, string.format("UID: %s, Time: %s, Flow: %s, IP: %s",
-                status.uid or "N/A", status.time or "N/A", status.flow or "N/A", status.v4ip or "N/A"))
+                mask_id(status.uid), status.time or "N/A", status.flow or "N/A", status.v4ip or "N/A"))
         end
         return true
     else
-        log_ifname(config.interface, string.format("认证失败: %s - %s", config.user, result and result.message or "未知错误"))
+        log_ifname(config.interface, string.format("认证失败: %s - %s", mask_id(config.user), result and result.message or "未知错误"))
         log_ifname(config.interface, result and result.result or "N/A")
         return false
     end

@@ -5,13 +5,24 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-cquauth
-PKG_VERSION:=1.1.2
+PKG_VERSION:=1.1.3
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=lurenjiamax <lurenjiamax@gmail.com>
 
 LUCI_TITLE:=CQU Auth (Chongqing University Authentication)
 LUCI_PKGARCH:=all
+# 1.1.3: 修 rpcd 后端的 shell 命令注入 + 日志打码.
+#        ucode: log() 原先把消息原样拼在 logger 后面交给 shell, 而不少日志直接写门户返回的原文
+#               (明文 HTTP, 同网段可伪造), 能伪造门户响应的人就能以 root 执行命令. 新增 shq()
+#               单引号转义, 所有拼进命令的内容(日志、uclient-fetch 的 URL、诊断脚本参数)都经它;
+#               门户返回的 v46ip 必须是合法 IPv4 才会被使用; service 的 action 只收白名单;
+#               enable_ecmp 校验接口名/路由表/网关, get_gw 改用 jq --arg (原先拼进 jq 表达式
+#               且没加引号, 本来就会报错).
+#               删掉 "Generated URL" 日志: 它截取的那段 URL 其实含账号和密码, 之前只是碰巧被
+#               shell 当成后台符号的 & 截断才没写出来, 修好引号后会原样泄露.
+#        lua+ucode: 日志里的学号/账号打码, 只留首尾各 4 位.
+#        ucode: running 改用 pidof; pgrep -f 会把调用它的 sh -c 也算进去, 多报一个 PID.
 # 1.1.2: 日志瘦身 + 门户不可达时页面不卡.
 #        lua: 查门户带 quiet+fresh, 不再每轮写状态日志与 "Sleeping.."; 改为状态变化时记一行
 #             (启动/在线/未认证/门户不可达 之间切换) + 每小时一行心跳. 原先每分钟 3 行,
